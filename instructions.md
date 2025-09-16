@@ -18,14 +18,17 @@ Here's our progress, make sure you update this as we proceed
 Note that you can run this testing script as we proceed with
 uv run try_new_pipeline.py
 
+
 trim_whitespace_address_and_postcode [DONE]
 canonicalise_postcode [DONE]
 upper_case_address_and_postcode [DONE]
 clean_address_string_first_pass [DONE]
-remove_duplicate_end_tokens,
-derive_original_address_concat,
-parse_out_flat_position_and_letter,
-parse_out_numbers,
-clean_address_string_second_pass,
-split_numeric_tokens_to_cols,
-tokenise_address_without_numbers,
+remove_duplicate_end_tokens [DONE]
+derive_original_address_concat [DONE]
+parse_out_flat_position_and_letter [DONE]
+parse_out_numbers [DONE]
+clean_address_string_second_pass [DONE]
+split_numeric_tokens_to_cols [DONE]
+tokenise_address_without_numbers [DONE]
+
+# TODO: Before continuing migration, add test that checks result is identical to old pipeline
