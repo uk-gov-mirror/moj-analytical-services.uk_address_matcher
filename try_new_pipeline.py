@@ -25,7 +25,7 @@ select
    latitude as lat,
    longitude as lng
 from read_parquet('{full_os_path}')
-limit 5
+limit 50000
 
 """
 con.execute(sql)
@@ -42,7 +42,7 @@ pipe.add_step(clean_address_string_first_pass())
 
 out = pipe.run(pretty_print_sql=False)
 print("Result:")
-out.show()
+out.df()
 
 end_time = time.time()
 print(f"Time taken: {end_time - start_time:.2f} seconds")
