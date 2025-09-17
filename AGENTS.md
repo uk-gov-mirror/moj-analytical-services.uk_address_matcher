@@ -31,4 +31,6 @@ clean_address_string_second_pass [DONE]
 split_numeric_tokens_to_cols [DONE]
 tokenise_address_without_numbers [DONE]
 
-# TODO: Before continuing migration, add test that checks result is identical to old pipeline
+
+- Ensure that you port over docstrings
+- Make sure you copy over the same regex code, looking carefully at the number of \, and keeping the same number

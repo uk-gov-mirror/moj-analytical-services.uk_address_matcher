@@ -4,8 +4,10 @@ from uk_address_matcher.cleaning.regexes import (
     remove_apostrophes,
     remove_commas_periods,
     remove_multiple_spaces,
+    # remove_repeated_tokens, # TODO: Restore functionality if needed
     replace_fwd_slash_with_dash,
     separate_letter_num,
+    # standarise_num_dash_num, # TODO: Restore functionality if needed
     standarise_num_letter,
     trim,
 )
@@ -31,6 +33,19 @@ def trim_whitespace_address_and_postcode() -> Stage:
 
 
 def canonicalise_postcode() -> Stage:
+    """
+    Ensures that any postcode matching the UK format has a single space
+    separating the outward and inward codes. It assumes the postcode has
+    already been trimmed and converted to uppercase.
+
+    Args:
+        ddb_pyrel (DuckDBPyRelation): The input relation, expected to have an
+                                      uppercase 'postcode' column.
+        con (DuckDBPyConnection): The DuckDB connection.
+
+    Returns:
+        DuckDBPyRelation: Relation with the 'postcode' column canonicalised.
+    """
     uk_postcode_regex = r"^([A-Z]{1,2}\d[A-Z\d]?|GIR)\s*(\d[A-Z]{2})$"
     sql = f"""
     select
@@ -66,9 +81,11 @@ def clean_address_string_first_pass() -> Stage:
             remove_apostrophes,
             remove_multiple_spaces,
             replace_fwd_slash_with_dash,
+            # standarise_num_dash_num,
             separate_letter_num,
             standarise_num_letter,
             move_flat_to_front,
+            # remove_repeated_tokens,
             trim,
         ],
     )
@@ -83,6 +100,10 @@ def clean_address_string_first_pass() -> Stage:
 
 
 def remove_duplicate_end_tokens() -> Stage:
+    """
+    Removes duplicated tokens at the end of the address.
+    E.g. 'HIGH STREET ST ALBANS ST ALBANS' -> 'HIGH STREET ST ALBANS'
+    """
     sql = """
     with tokenised as (
     select *, string_split(address_concat, ' ') as cleaned_tokenised
@@ -118,6 +139,17 @@ def derive_original_address_concat() -> Stage:
 
 
 def parse_out_flat_position_and_letter() -> Stage:
+    """
+    Extracts flat positions and letters from address strings into separate columns.
+
+
+    Args:
+        ddb_pyrel: The input relation
+        con: The DuckDB connection
+
+    Returns:
+        DuckDBPyRelation: The modified table with flat_positional and flat_letter fields
+    """
     floor_positions = r"\b(BASEMENT|GROUND FLOOR|FIRST FLOOR|SECOND FLOOR|THIRD FLOOR|TOP FLOOR|GARDEN)\b"
     flat_letter = r"\b\d{0,4}([A-Za-z])\b"
     leading_letter = r"^\s*\d+([A-Za-z])\b"
@@ -151,6 +183,22 @@ def parse_out_flat_position_and_letter() -> Stage:
 
 
 def parse_out_numbers() -> Stage:
+    """
+    Extracts and processes numeric tokens from address strings, ensuring the max length
+    of the number+letter is 6 with no more than 1 letter which can be at the start or end.
+    It also captures ranges like '1-2', '12-17', '98-102' as a single 'number', and
+    matches patterns like '20A', 'A20', '20', and '20-21'.
+
+    Special case: If flat_letter is a number, the first number found will be ignored
+    as it's likely a duplicate of the flat number.
+
+    Args:
+        table_name (str): The name of the table to process.
+        con (DuckDBPyConnection): The DuckDB connection.
+
+    Returns:
+        DuckDBPyRelation: The modified table with processed fields.
+    """
     regex_pattern = (
         r"\b"  # Word boundary
         # Prioritize matching number ranges first
