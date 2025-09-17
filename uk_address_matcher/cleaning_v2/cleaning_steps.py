@@ -1,3 +1,4 @@
+from uk_address_matcher.cleaning.cleaning_steps import GENERALISED_TOKEN_ALIASES_CASE_STATEMENT
 from uk_address_matcher.cleaning.regexes import (
     construct_nested_call,
     move_flat_to_front,
@@ -138,6 +139,84 @@ def derive_original_address_concat() -> Stage:
     return Stage(name="derive_original_address_concat", steps=[step])
 
 
+def separate_distinguishing_start_tokens_from_with_respect_to_adjacent_recrods() -> Stage:
+    """
+    Identifies common suffixes between addresses and separates them into unique and common parts.
+    This function analyzes each address in relation to its neighbors (previous and next addresses
+    when sorted by unique_id) to find common suffix patterns. It then splits each address into:
+    - unique_tokens: The tokens that are unique to this address (typically the beginning part)
+    - common_tokens: The tokens that are shared with neighboring addresses (typically the end part)
+    Args:
+        ddb_pyrel (DuckDBPyRelation): The input relation
+        con (DuckDBPyConnection): The DuckDB connection
+    Returns:
+        DuckDBPyRelation: The modified table with unique_tokens and common_tokens fields
+    """
+    sql = """
+    WITH tokens AS (
+        SELECT
+            ['FLAT', 'APARTMENT', 'UNIT'] AS __tokens_to_remove,
+            list_filter(
+                regexp_split_to_array(address_concat, '\\s+'),
+                x -> not list_contains(__tokens_to_remove, x)
+            )
+                AS __tokens,
+            row_number() OVER (ORDER BY reverse(address_concat)) AS row_order,
+            *
+        FROM {input}
+    ),
+    with_neighbors AS (
+        SELECT
+            lag(__tokens) OVER (ORDER BY row_order) AS __prev_tokens,
+            lead(__tokens) OVER (ORDER BY row_order) AS __next_tokens,
+            *
+        FROM tokens
+    ),
+    with_suffix_lengths AS (
+        SELECT
+            len(__tokens) AS __token_count,
+            -- Calculate common suffix length with previous address
+            CASE WHEN __prev_tokens IS NOT NULL THEN
+                (SELECT max(i)
+                FROM range(0, least(len(__tokens), len(__prev_tokens))) AS t(i)
+                WHERE list_slice(list_reverse(__tokens), 1, i+1) =
+                    list_slice(list_reverse(__prev_tokens), 1, i+1))
+            ELSE 0 END AS prev_common_suffix,
+            -- Calculate common suffix length with next address
+            CASE WHEN __next_tokens IS NOT NULL THEN
+                (SELECT max(i)
+                FROM range(0, least(len(__tokens), len(__next_tokens))) AS t(i)
+                WHERE list_slice(list_reverse(__tokens), 1, i+1) =
+                    list_slice(list_reverse(__next_tokens), 1, i+1))
+            ELSE 0 END AS next_common_suffix,
+            *
+        FROM with_neighbors
+    ),
+    with_unique_parts AS (
+        SELECT
+            *,
+            -- Find the maximum common suffix length
+            greatest(prev_common_suffix, next_common_suffix) AS max_common_suffix,
+            -- Use list_filter with index to keep only the unique part at the beginning
+            list_filter(__tokens, (token, i) -> i < __token_count - greatest(prev_common_suffix, next_common_suffix)) AS unique_tokens,
+            -- Use list_filter with index to keep only the common part at the end
+            list_filter(__tokens, (token, i) -> i >= __token_count - greatest(prev_common_suffix, next_common_suffix)) AS common_tokens
+        FROM with_suffix_lengths
+    )
+    SELECT
+        * EXCLUDE (__tokens, __prev_tokens, __next_tokens, __token_count, __tokens_to_remove, max_common_suffix, next_common_suffix, prev_common_suffix, row_order, common_tokens,unique_tokens),
+        COALESCE(unique_tokens, ARRAY[]) AS distinguishing_adj_start_tokens,
+        COALESCE(common_tokens, ARRAY[]) AS common_adj_start_tokens,
+    FROM
+    with_unique_parts
+    """
+    step = CTEStep("1", sql)
+    return Stage(
+        name="separate_distinguishing_start_tokens_from_with_respect_to_adjacent_recrods",
+        steps=[step],
+    )
+
+
 def parse_out_flat_position_and_letter() -> Stage:
     """
     Extracts flat positions and letters from address strings into separate columns.
@@ -259,3 +338,51 @@ def tokenise_address_without_numbers() -> Stage:
     """
     step = CTEStep("1", sql)
     return Stage(name="tokenise_address_without_numbers", steps=[step])
+
+
+def generalised_token_aliases() -> Stage:
+    """
+    Maps specific tokens to more general categories to create a generalised representation
+    of the unique tokens in an address.
+
+    The idea is to guide matches away from implausible matches and towards
+    possible matches
+
+    The real tokens always take precidence over genearlised
+
+    For example sometimes a 2nd floor flat will match to top floor.  Whilst 'top floor'
+    is often ambiguous (is the 2nd floor the top floor), we know that
+    'top floor' cannot match to 'ground' or 'basement'
+
+    This function applies the following mappings:
+
+    [FIRST, SECOND, THIRD, TOP] -> [UPPERFLOOR, LEVEL]
+
+    [GARDEN, GROUND] -> [GROUNDFLOOR, LEVEL]
+
+
+    This function applies the following mappings:
+    - Single letters (A-E) -> UNIT_NUM_LET
+    - Single digits (1-5) -> UNIT_NUM_LET
+    - Floor indicators (FIRST, SECOND, THIRD) -> LEVEL
+    - Position indicators (TOP, FIRST, SECOND, THIRD) -> TOP
+    The following tokens are filtered out completely:
+    - FLAT, APARTMENT, UNIT
+    Args:
+        ddb_pyrel (DuckDBPyRelation): The input relation with unique_tokens field
+        con (DuckDBPyConnection): The DuckDB connection
+    Returns:
+        DuckDBPyRelation: The modified table with generalised_unique_tokens field
+    """
+    sql = f"""
+    SELECT
+        *,
+        flatten(
+            list_transform(distinguishing_adj_start_tokens, token ->
+               {GENERALISED_TOKEN_ALIASES_CASE_STATEMENT}
+            )
+        ) AS distinguishing_adj_token_aliases
+    FROM {{input}}
+    """
+    step = CTEStep("1", sql)
+    return Stage(name="generalised_token_aliases", steps=[step])
