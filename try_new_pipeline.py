@@ -31,7 +31,7 @@ from uk_address_matcher.cleaning.cleaning_steps import (
 from uk_address_matcher.cleaning.run_pipeline import run_pipeline
 
 import duckdb
-import time
+from time import perf_counter
 
 
 queue = [
@@ -62,32 +62,35 @@ select
    latitude as lat,
    longitude as lng
 from read_parquet('{full_os_path}')
-limit 50000
+limit 5000
 
 """
 con.execute(sql)
 os_df = con.table("os")
 
-start_time = time.time()
 
 pipe = DuckDBPipeline(con, os_df)
 
 for v2, v1 in queue:
     pipe.add_step(v2())
 
-
+t0 = perf_counter()
 clean_v2 = pipe.run(pretty_print_sql=False)
+clean_v1_df = clean_v2.df()
+end_time = perf_counter()
+print(f"Time taken: {end_time - t0:.2f} seconds")
 
 clean_v2.show()
 
-end_time = time.time()
-print(f"Time taken: {end_time - start_time:.2f} seconds")
 
 queue_v2 = [v[1] for v in queue]
+start_time = perf_counter()
 clean_v1 = run_pipeline(
     os_df,
     con=con,
     cleaning_queue=queue_v2,
-    print_intermediate=False,
 )
-clean_v1.show()
+clean_v2_df = clean_v1.df()
+
+end_time = perf_counter()
+print(f"Time taken: {end_time - start_time:.2f} seconds")
