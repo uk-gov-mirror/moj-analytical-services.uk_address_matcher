@@ -95,7 +95,7 @@ select
    latitude as lat,
    longitude as lng
 from read_parquet('{full_os_path}')
-limit 10000
+limit 100
 
 """
 con.execute(sql)
@@ -127,8 +127,8 @@ end_time = perf_counter()
 print(f"Time taken: {end_time - start_time:.2f} seconds")
 clean_v1_df
 
-clean_v2.limit(10).show(max_width=100000)
-clean_v1.limit(10).show(max_width=100000)
+# clean_v2.limit(10).show(max_width=100000)
+# clean_v1.limit(10).show(max_width=100000)
 
 assert_frame_equal(
     clean_v2_df,
@@ -145,7 +145,7 @@ from uk_address_matcher.cleaning_v2.cleaning_pipelines import (
 )
 from uk_address_matcher.cleaning.cleaning_pipelines import (
     clean_data_on_the_fly as clean_data_on_the_fly_v1,
-    clean_data_using_precomputed_rel_tok_freq,
+    clean_data_using_precomputed_rel_tok_freq as clean_data_using_precomputed_rel_tok_freq_v1,
 )
 
 v2_fly = clean_data_on_the_fly(
@@ -161,6 +161,25 @@ v1_fly = clean_data_on_the_fly_v1(
 assert_frame_equal(
     v1_fly,
     v2_fly,
+    check_dtype=False,
+    check_exact=False,
+    rtol=1e-8,
+    atol=1e-12,
+)
+
+v2_fly_pre = clean_data_using_precomputed_rel_tok_freq(
+    address_table=os_df,
+    con=con,
+).df()
+
+v1_fly_pre = clean_data_using_precomputed_rel_tok_freq_v1(
+    address_table=os_df,
+    con=con,
+).df()
+
+assert_frame_equal(
+    v1_fly_pre,
+    v2_fly_pre,
     check_dtype=False,
     check_exact=False,
     rtol=1e-8,
