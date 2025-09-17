@@ -8,14 +8,18 @@ from uk_address_matcher.cleaning_v2.cleaning_steps import (
     clean_address_string_second_pass,
     derive_original_address_concat,
     generalised_token_aliases,
+    final_column_order,
+    first_unusual_token,
     move_common_end_tokens_to_field,
     parse_out_flat_position_and_letter,
     parse_out_numbers,
     remove_duplicate_end_tokens,
     separate_distinguishing_start_tokens_from_with_respect_to_adjacent_recrods,
+    separate_unusual_tokens,
     split_numeric_tokens_to_cols,
     tokenise_address_without_numbers,
     trim_whitespace_address_and_postcode,
+    use_first_unusual_token_if_no_numeric_token,
     upper_case_address_and_postcode,
 )
 
@@ -26,6 +30,8 @@ from uk_address_matcher.cleaning.cleaning_steps import (
     clean_address_string_second_pass as clean_address_string_second_pass_v1,
     derive_original_address_concat as derive_original_address_concat_v1,
     generalised_token_aliases as generalised_token_aliases_v1,
+    final_column_order as final_column_order_v1,
+    first_unusual_token as first_unusual_token_v1,
     move_common_end_tokens_to_field as move_common_end_tokens_to_field_v1,
     parse_out_flat_position_and_letter as parse_out_flat_position_and_letter_v1,
     parse_out_numbers as parse_out_numbers_v1,
@@ -35,6 +41,8 @@ from uk_address_matcher.cleaning.cleaning_steps import (
     upper_case_address_and_postcode as upper_case_address_and_postcode_v1,
     remove_duplicate_end_tokens as remove_duplicate_end_tokens_v1,
     separate_distinguishing_start_tokens_from_with_respect_to_adjacent_recrods as separate_distinguishing_start_tokens_from_with_respect_to_adjacent_recrods_v1,
+    separate_unusual_tokens as separate_unusual_tokens_v1,
+    use_first_unusual_token_if_no_numeric_token as use_first_unusual_token_if_no_numeric_token_v1,
 )
 from uk_address_matcher.cleaning.run_pipeline import run_pipeline
 
@@ -64,6 +72,13 @@ queue = [
         add_term_frequencies_to_address_tokens_v1,
     ),
     (move_common_end_tokens_to_field, move_common_end_tokens_to_field_v1),
+    (first_unusual_token, first_unusual_token_v1),
+    (
+        use_first_unusual_token_if_no_numeric_token,
+        use_first_unusual_token_if_no_numeric_token_v1,
+    ),
+    (separate_unusual_tokens, separate_unusual_tokens_v1),
+    (final_column_order, final_column_order_v1),
 ]
 
 con = duckdb.connect()

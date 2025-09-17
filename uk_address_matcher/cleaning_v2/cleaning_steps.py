@@ -570,3 +570,116 @@ def move_common_end_tokens_to_field() -> Stage:
         steps=steps,
         output="final",
     )
+
+
+def first_unusual_token() -> Stage:
+    """Attach the first token below the frequency threshold (0.001) if present."""
+
+    first_token_expr = (
+        "list_any_value(list_filter(token_rel_freq_arr, x -> x.rel_freq < 0.001))"
+    )
+
+    sql = f"""
+    SELECT
+        {first_token_expr} AS first_unusual_token,
+        *
+    FROM {{input}}
+    """
+    step = CTEStep("1", sql)
+    return Stage(name="first_unusual_token", steps=[step])
+
+
+def use_first_unusual_token_if_no_numeric_token() -> Stage:
+    """Fallback to the unusual token when numeric_token_1 is missing."""
+
+    sql = """
+    SELECT
+        * EXCLUDE (numeric_token_1, token_rel_freq_arr, first_unusual_token),
+        CASE
+            WHEN numeric_token_1 IS NULL THEN first_unusual_token.tok
+            ELSE numeric_token_1
+        END AS numeric_token_1,
+        CASE
+            WHEN numeric_token_1 IS NULL THEN
+                list_filter(
+                    token_rel_freq_arr,
+                    x -> coalesce(x.tok != first_unusual_token.tok, TRUE)
+                )
+            ELSE token_rel_freq_arr
+        END AS token_rel_freq_arr
+    FROM {input}
+    """
+    step = CTEStep("1", sql)
+    return Stage(
+        name="use_first_unusual_token_if_no_numeric_token",
+        steps=[step],
+    )
+
+
+def separate_unusual_tokens() -> Stage:
+    """Split token list into frequency bands for matching heuristics."""
+
+    sql = """
+    SELECT
+        *,
+        list_transform(
+            list_filter(
+                list_select(
+                    token_rel_freq_arr,
+                    list_grade_up(list_transform(token_rel_freq_arr, x -> x.rel_freq))
+                ),
+                x -> x.rel_freq < 1e-4 AND x.rel_freq >= 5e-5
+            ),
+            x -> x.tok
+        ) AS unusual_tokens_arr,
+        list_transform(
+            list_filter(
+                list_select(
+                    token_rel_freq_arr,
+                    list_grade_up(list_transform(token_rel_freq_arr, x -> x.rel_freq))
+                ),
+                x -> x.rel_freq < 5e-5 AND x.rel_freq >= 1e-7
+            ),
+            x -> x.tok
+        ) AS very_unusual_tokens_arr,
+        list_transform(
+            list_filter(
+                list_select(
+                    token_rel_freq_arr,
+                    list_grade_up(list_transform(token_rel_freq_arr, x -> x.rel_freq))
+                ),
+                x -> x.rel_freq < 1e-7
+            ),
+            x -> x.tok
+        ) AS extremely_unusual_tokens_arr
+    FROM {input}
+    """
+    step = CTEStep("1", sql)
+    return Stage(name="separate_unusual_tokens", steps=[step])
+
+
+def final_column_order() -> Stage:
+    """Reorder and aggregate columns to match the legacy final layout."""
+
+    sql = """
+    SELECT
+        unique_id,
+        numeric_token_1,
+        numeric_token_2,
+        numeric_token_3,
+        list_aggregate(token_rel_freq_arr, 'histogram') AS token_rel_freq_arr_hist,
+        list_aggregate(common_end_tokens, 'histogram') AS common_end_tokens_hist,
+        postcode,
+        * EXCLUDE (
+            unique_id,
+            numeric_token_1,
+            numeric_token_2,
+            numeric_token_3,
+            token_rel_freq_arr,
+            common_end_tokens,
+            postcode
+        )
+    FROM {input}
+    """
+    step = CTEStep("1", sql)
+    return Stage(name="final_column_order", steps=[step])

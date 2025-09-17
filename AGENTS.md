@@ -33,10 +33,10 @@ clean_address_string_second_pass [DONE]
 split_numeric_tokens_to_cols [DONE]
 tokenise_address_without_numbers [DONE]
 move_common_end_tokens_to_field [DONE]
-first_unusual_token,
-use_first_unusual_token_if_no_numeric_token,
-separate_unusual_tokens,
-final_column_order,
+first_unusual_token [DONE]
+use_first_unusual_token_if_no_numeric_token [DONE]
+separate_unusual_tokens [DONE]
+final_column_order [DONE]
 
 
 
