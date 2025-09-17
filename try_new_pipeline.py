@@ -138,3 +138,31 @@ assert_frame_equal(
     rtol=1e-8,
     atol=1e-12,
 )
+
+from uk_address_matcher.cleaning_v2.cleaning_pipelines import (
+    clean_data_on_the_fly,
+    clean_data_using_precomputed_rel_tok_freq,
+)
+from uk_address_matcher.cleaning.cleaning_pipelines import (
+    clean_data_on_the_fly as clean_data_on_the_fly_v1,
+    clean_data_using_precomputed_rel_tok_freq,
+)
+
+v2_fly = clean_data_on_the_fly(
+    address_table=os_df,
+    con=con,
+).df()
+
+v1_fly = clean_data_on_the_fly_v1(
+    address_table=os_df,
+    con=con,
+).df()
+
+assert_frame_equal(
+    v1_fly,
+    v2_fly,
+    check_dtype=False,
+    check_exact=False,
+    rtol=1e-8,
+    atol=1e-12,
+)

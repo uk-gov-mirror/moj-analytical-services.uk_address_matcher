@@ -457,6 +457,68 @@ def add_term_frequencies_to_address_tokens() -> Stage:
     )
 
 
+def add_term_frequencies_to_address_tokens_using_registered_df() -> Stage:
+    """Attach precomputed token frequencies registered as rel_tok_freq."""
+
+    base_sql = """
+    SELECT * FROM {input}
+    """
+
+    addresses_exploded_sql = """
+    SELECT
+        unique_id,
+        unnest(address_without_numbers_tokenised) AS token,
+        generate_subscripts(address_without_numbers_tokenised, 1) AS token_order
+    FROM {base}
+    """
+
+    address_groups_sql = """
+    SELECT
+        {addresses_exploded}.*,
+        COALESCE(rel_tok_freq.rel_freq, 5e-5) AS rel_freq
+    FROM {addresses_exploded}
+    LEFT JOIN rel_tok_freq
+        ON {addresses_exploded}.token = rel_tok_freq.token
+    """
+
+    token_freq_lookup_sql = """
+    SELECT
+        unique_id,
+        list_transform(
+            list_zip(
+                array_agg(token ORDER BY unique_id, token_order ASC),
+                array_agg(rel_freq ORDER BY unique_id, token_order ASC)
+            ),
+            x -> struct_pack(tok := x[1], rel_freq := x[2])
+        ) AS token_rel_freq_arr
+    FROM {address_groups}
+    GROUP BY unique_id
+    """
+
+    final_sql = """
+    SELECT
+        base.* EXCLUDE (address_without_numbers_tokenised),
+        lookup.token_rel_freq_arr
+    FROM {base} AS base
+    INNER JOIN {token_freq_lookup} AS lookup
+        ON base.unique_id = lookup.unique_id
+    """
+
+    steps = [
+        CTEStep("base", base_sql),
+        CTEStep("addresses_exploded", addresses_exploded_sql),
+        CTEStep("address_groups", address_groups_sql),
+        CTEStep("token_freq_lookup", token_freq_lookup_sql),
+        CTEStep("final", final_sql),
+    ]
+
+    return Stage(
+        name="add_term_frequencies_to_address_tokens_using_registered_df",
+        steps=steps,
+        output="final",
+    )
+
+
 def generalised_token_aliases() -> Stage:
     """
     Maps specific tokens to more general categories to create a generalised representation
@@ -683,3 +745,46 @@ def final_column_order() -> Stage:
     """
     step = CTEStep("1", sql)
     return Stage(name="final_column_order", steps=[step])
+
+
+def get_token_frequeny_table() -> Stage:
+    sql = """
+    SELECT
+        token_counts.token,
+        token_counts.rel_freq
+    FROM (
+        SELECT
+            token,
+            COUNT(*) AS count,
+            COUNT(*) / (SELECT COUNT(*) FROM {unnested}) AS rel_freq
+        FROM {unnested}
+        GROUP BY token
+    ) AS token_counts
+    ORDER BY count DESC
+    """
+
+    concatenated_sql = """
+    SELECT
+        unique_id,
+        list_concat(
+            array_filter(
+                [numeric_token_1, numeric_token_2, numeric_token_3],
+                x -> x IS NOT NULL
+            ),
+            address_without_numbers_tokenised
+        ) AS all_tokens
+    FROM {input}
+    """
+
+    unnested_sql = """
+    SELECT unnest(all_tokens) AS token
+    FROM {concatenated_tokens}
+    """
+
+    steps = [
+        CTEStep("concatenated_tokens", concatenated_sql),
+        CTEStep("unnested", unnested_sql),
+        CTEStep("final", sql),
+    ]
+
+    return Stage(name="get_token_frequeny_table", steps=steps, output="final")
