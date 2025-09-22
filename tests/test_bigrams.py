@@ -1,4 +1,3 @@
-import pytest
 import duckdb
 import pandas as pd
 from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
@@ -136,9 +135,9 @@ def run_assertions(
                 # For map-type columns, iterate over key-value pairs
                 for key, expected in checks:
                     if expected is None:
-                        assert key not in map_dict, (
-                            f"{key} should not be in {column} for {unique_id_l}"
-                        )
+                        assert (
+                            key not in map_dict
+                        ), f"{key} should not be in {column} for {unique_id_l}"
                     else:
                         actual = map_dict.get(key)
                         assert actual == expected, (
