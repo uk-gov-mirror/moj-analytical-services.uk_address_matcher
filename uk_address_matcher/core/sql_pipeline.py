@@ -1,12 +1,28 @@
 from __future__ import annotations
 
 import random
+import os
 import re
 import string
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
+import logging
 
 import duckdb
+
+logger = logging.getLogger("uk_address_matcher")
+
+
+def _emit_debug(msg: str) -> None:
+    """Emit debug output via logger if configured, else stdout.
+
+    Many users won't configure logging in quick scripts, so when debug/pretty-print
+    is enabled we print to stdout to ensure visibility.
+    """
+    if logger.handlers and logger.isEnabledFor(logging.DEBUG):
+        logger.debug(msg)
+    else:
+        print(msg)
 
 
 def _uid(n: int = 6) -> str:
@@ -105,6 +121,48 @@ def render_step_to_ctes(
     return ctes, out_alias
 
 
+@dataclass
+class RunOptions:
+    pretty_print_sql: bool = False
+    debug_mode: bool = False
+    debug_show_sql: bool = False
+    debug_max_rows: Optional[int] = None
+
+    @staticmethod
+    def _getenv_bool(name: str, default: bool) -> bool:
+        val = os.getenv(name)
+        if val is None:
+            return default
+        return val.strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _getenv_int(name: str, default: Optional[int]) -> Optional[int]:
+        val = os.getenv(name)
+        if val is None or val == "":
+            return default
+        try:
+            return int(val)
+        except ValueError:
+            return default
+
+    @classmethod
+    def from_env(cls) -> "RunOptions":
+        return cls(
+            pretty_print_sql=cls._getenv_bool("UKAM_PRETTY_PRINT_SQL", False),
+            debug_mode=cls._getenv_bool("UKAM_DEBUG_MODE", False),
+            debug_show_sql=cls._getenv_bool("UKAM_DEBUG_SHOW_SQL", False),
+            debug_max_rows=cls._getenv_int("UKAM_DEBUG_MAX_ROWS", None),
+        )
+
+    def __str__(self) -> str:
+        return (
+            f"RunOptions(pretty_print_sql={self.pretty_print_sql}, "
+            f"debug_mode={self.debug_mode}, "
+            f"debug_show_sql={self.debug_show_sql}, "
+            f"debug_max_rows={self.debug_max_rows})"
+        )
+
+
 # ---------------------------
 # duckdb-oriented runner with checkpoints and debug mode
 # ---------------------------
@@ -120,6 +178,8 @@ class DuckDBPipeline(CTEPipeline):
         self.enqueue_sql(f"SELECT * FROM {self._src_name}", seed)
         self._current_output_alias = seed
         self._step_counter = 0
+        # Defaults for run options (read from environment by default)
+        self._default_run_options = RunOptions.from_env()
 
     def add_step(self, step: Stage) -> None:
         # run any preludes / registers
@@ -162,7 +222,7 @@ class DuckDBPipeline(CTEPipeline):
         current segment (after the last checkpoint).
         """
         if not self.queue:
-            print("No CTEs enqueued.")
+            logger.debug("No CTEs enqueued.")
             return
 
         total = len(self.queue)
@@ -171,10 +231,10 @@ class DuckDBPipeline(CTEPipeline):
             alias = subset[-1][1]
             sql = self._compose_with_sql_from(subset)
 
-            print(f"\n=== DEBUG STEP {i}/{total} — alias `{alias}` ===\n")
+            _emit_debug(f"\n=== DEBUG STEP {i}/{total} — alias `{alias}` ===\n")
             if show_sql:
-                print(_pretty_sql(sql))
-                print("\n--------------------------------------------\n")
+                _emit_debug(_pretty_sql(sql))
+                _emit_debug("\n--------------------------------------------\n")
 
             rel = self.con.sql(sql)
             if max_rows is not None:
@@ -182,20 +242,14 @@ class DuckDBPipeline(CTEPipeline):
             else:
                 rel.show()
 
-    def run(
-        self,
-        *,
-        pretty_print_sql: bool = True,
-        debug_mode: bool = False,
-        debug_show_sql: bool = False,
-        debug_max_rows: Optional[int] = None,
-    ):
+    def run_with_options(self, options: RunOptions):
+        """Preferred entry: run pipeline using the given RunOptions."""
         # Optional debug pass over all intermediates before final execution
-        if debug_mode:
-            self.debug(show_sql=debug_show_sql, max_rows=debug_max_rows)
+        if options.debug_mode:
+            self.debug(show_sql=options.debug_show_sql, max_rows=options.debug_max_rows)
 
         final_sql = self.generate_cte_pipeline_sql()
-        if pretty_print_sql:
+        if options.pretty_print_sql:
             final_alias = self.output_table_name
             segments: List[Tuple[str, str]] = [
                 *self._materialised_sql_blocks,
@@ -210,7 +264,47 @@ class DuckDBPipeline(CTEPipeline):
                         label = f"final segment after checkpoints (current alias {materialised_name})"
                     else:
                         label = f"final segment (current alias {materialised_name})"
-                print(f"\n=== SQL SEGMENT {idx} ({label}) ===\n")
-                print(_pretty_sql(sql))
-                print("\n===============================\n")
+                _emit_debug(f"\n=== SQL SEGMENT {idx} ({label}) ===\n")
+                _emit_debug(_pretty_sql(sql))
+                _emit_debug("\n===============================\n")
         return self.con.sql(final_sql)
+
+    def run(
+        self,
+        *,
+        pretty_print_sql: Optional[bool] = None,
+        debug_mode: Optional[bool] = None,
+        debug_show_sql: Optional[bool] = None,
+        debug_max_rows: Optional[int] = None,
+    ):
+        """
+        Backwards-compatible wrapper that builds RunOptions from args merged
+        with environment-derived defaults. Prefer run_with_options.
+        """
+        opts = RunOptions(
+            pretty_print_sql=(
+                pretty_print_sql
+                if pretty_print_sql is not None
+                else self._default_run_options.pretty_print_sql
+            ),
+            debug_mode=(
+                debug_mode
+                if debug_mode is not None
+                else self._default_run_options.debug_mode
+            ),
+            debug_show_sql=(
+                debug_show_sql
+                if debug_show_sql is not None
+                else self._default_run_options.debug_show_sql
+            ),
+            debug_max_rows=(
+                debug_max_rows
+                if debug_max_rows is not None
+                else self._default_run_options.debug_max_rows
+            ),
+        )
+        return self.run_with_options(opts)
+
+
+def single_cte_stage(name: str, sql: str) -> Stage:
+    return Stage(name=name, steps=[CTEStep("1", sql)])
