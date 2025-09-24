@@ -1,18 +1,21 @@
 from __future__ import annotations
 
-from typing import List
 
 import importlib.resources as pkg_resources
-from uk_address_matcher.core.sql_pipeline import CTEStep, Stage
+from uk_address_matcher.core.pipeline_registry import register_step
 
 
-def _add_term_frequencies_to_address_tokens() -> Stage:
-    """Compute token-level relative frequencies and attach them to each record."""
-
+@register_step(
+    name="add_term_frequencies_to_address_tokens",
+    description="Compute relative frequencies for tokens and attach as token_rel_freq_arr",
+    group="feature_engineering",
+    input_cols=["unique_id", "address_without_numbers_tokenised"],
+    output_cols=["token_rel_freq_arr"],
+)
+def _add_term_frequencies_to_address_tokens() -> list[tuple[str, str]]:
     base_sql = """
     SELECT * FROM {input}
     """
-
     rel_tok_freq_cte_sql = """
     SELECT
         token,
@@ -24,7 +27,6 @@ def _add_term_frequencies_to_address_tokens() -> Stage:
     )
     GROUP BY token
     """
-
     addresses_exploded_sql = """
     SELECT
         unique_id,
@@ -32,7 +34,6 @@ def _add_term_frequencies_to_address_tokens() -> Stage:
         generate_subscripts(address_without_numbers_tokenised, 1) AS token_order
     FROM {base}
     """
-
     address_groups_sql = """
     SELECT
         {addresses_exploded}.*,
@@ -41,7 +42,6 @@ def _add_term_frequencies_to_address_tokens() -> Stage:
     LEFT JOIN {rel_tok_freq_cte}
         ON {addresses_exploded}.token = {rel_tok_freq_cte}.token
     """
-
     token_freq_lookup_sql = """
     SELECT
         unique_id,
@@ -55,7 +55,6 @@ def _add_term_frequencies_to_address_tokens() -> Stage:
     FROM {address_groups}
     GROUP BY unique_id
     """
-
     final_sql = """
     SELECT
         base.* EXCLUDE (address_without_numbers_tokenised),
@@ -64,28 +63,29 @@ def _add_term_frequencies_to_address_tokens() -> Stage:
     INNER JOIN {token_freq_lookup} AS lookup
         ON base.unique_id = lookup.unique_id
     """
-
-    steps = [
-        CTEStep("base", base_sql),
-        CTEStep("rel_tok_freq_cte", rel_tok_freq_cte_sql),
-        CTEStep("addresses_exploded", addresses_exploded_sql),
-        CTEStep("address_groups", address_groups_sql),
-        CTEStep("token_freq_lookup", token_freq_lookup_sql),
-        CTEStep("final", final_sql),
+    return [
+        ("base", base_sql),
+        ("rel_tok_freq_cte", rel_tok_freq_cte_sql),
+        ("addresses_exploded", addresses_exploded_sql),
+        ("address_groups", address_groups_sql),
+        ("token_freq_lookup", token_freq_lookup_sql),
+        ("final", final_sql),
     ]
 
-    return Stage(
-        name="add_term_frequencies_to_address_tokens", steps=steps, output="final"
-    )
 
-
-def _add_term_frequencies_to_address_tokens_using_registered_df() -> Stage:
-    """Attach precomputed token frequencies registered as rel_tok_freq."""
-
+@register_step(
+    name="add_term_frequencies_to_address_tokens_using_registered_df",
+    description="Attach precomputed token rel frequencies from rel_tok_freq relation",
+    group="feature_engineering",
+    input_cols=["unique_id", "address_without_numbers_tokenised"],
+    output_cols=["token_rel_freq_arr"],
+)
+def _add_term_frequencies_to_address_tokens_using_registered_df() -> (
+    list[tuple[str, str]]
+):
     base_sql = """
     SELECT * FROM {input}
     """
-
     addresses_exploded_sql = """
     SELECT
         unique_id,
@@ -93,7 +93,6 @@ def _add_term_frequencies_to_address_tokens_using_registered_df() -> Stage:
         generate_subscripts(address_without_numbers_tokenised, 1) AS token_order
     FROM {base}
     """
-
     address_groups_sql = """
     SELECT
         {addresses_exploded}.*,
@@ -102,7 +101,6 @@ def _add_term_frequencies_to_address_tokens_using_registered_df() -> Stage:
     LEFT JOIN rel_tok_freq
         ON {addresses_exploded}.token = rel_tok_freq.token
     """
-
     token_freq_lookup_sql = """
     SELECT
         unique_id,
@@ -116,7 +114,6 @@ def _add_term_frequencies_to_address_tokens_using_registered_df() -> Stage:
     FROM {address_groups}
     GROUP BY unique_id
     """
-
     final_sql = """
     SELECT
         base.* EXCLUDE (address_without_numbers_tokenised),
@@ -125,32 +122,26 @@ def _add_term_frequencies_to_address_tokens_using_registered_df() -> Stage:
     INNER JOIN {token_freq_lookup} AS lookup
         ON base.unique_id = lookup.unique_id
     """
-
-    steps = [
-        CTEStep("base", base_sql),
-        CTEStep("addresses_exploded", addresses_exploded_sql),
-        CTEStep("address_groups", address_groups_sql),
-        CTEStep("token_freq_lookup", token_freq_lookup_sql),
-        CTEStep("final", final_sql),
+    return [
+        ("base", base_sql),
+        ("addresses_exploded", addresses_exploded_sql),
+        ("address_groups", address_groups_sql),
+        ("token_freq_lookup", token_freq_lookup_sql),
+        ("final", final_sql),
     ]
 
-    return Stage(
-        name="add_term_frequencies_to_address_tokens_using_registered_df",
-        steps=steps,
-        output="final",
-    )
 
-
-def _move_common_end_tokens_to_field() -> Stage:
-    """
-    Move frequently occurring trailing tokens (e.g. counties) into a dedicated field and
-    remove them from the token frequency array so missing endings aren't over-penalised.
-    """
-
+@register_step(
+    name="move_common_end_tokens_to_field",
+    description="Move common trailing tokens to separate field and filter from rel_freq array",
+    group="feature_engineering",
+    input_cols=["token_rel_freq_arr"],
+    output_cols=["token_rel_freq_arr", "common_end_tokens"],
+)
+def _move_common_end_tokens_to_field() -> list[tuple[str, str]]:
     base_sql = """
     SELECT * FROM {input}
     """
-
     with pkg_resources.path(
         "uk_address_matcher.data", "common_end_tokens.csv"
     ) as csv_path:
@@ -159,13 +150,11 @@ def _move_common_end_tokens_to_field() -> Stage:
             from read_csv_auto('{csv_path}')
             where token_count > 3000
             """
-
     joined_sql = """
     SELECT *
     FROM {base}
     CROSS JOIN {common_end_tokens}
     """
-
     end_tokens_included_sql = """
     SELECT
         * EXCLUDE (end_tokens_to_remove),
@@ -175,7 +164,6 @@ def _move_common_end_tokens_to_field() -> Stage:
         ) AS common_end_tokens
     FROM {joined}
     """
-
     remove_end_tokens_expr = """
     list_filter(
         token_rel_freq_arr,
@@ -185,50 +173,49 @@ def _move_common_end_tokens_to_field() -> Stage:
         )
     )
     """
-
     final_sql = f"""
     SELECT
         * EXCLUDE (token_rel_freq_arr),
         {remove_end_tokens_expr} AS token_rel_freq_arr
     FROM {{end_tokens_included}}
     """
-
-    steps = [
-        CTEStep("base", base_sql),
-        CTEStep("common_end_tokens", common_end_tokens_sql),
-        CTEStep("joined", joined_sql),
-        CTEStep("end_tokens_included", end_tokens_included_sql),
-        CTEStep("final", final_sql),
+    return [
+        ("base", base_sql),
+        ("common_end_tokens", common_end_tokens_sql),
+        ("joined", joined_sql),
+        ("end_tokens_included", end_tokens_included_sql),
+        ("final", final_sql),
     ]
 
-    return Stage(
-        name="move_common_end_tokens_to_field",
-        steps=steps,
-        output="final",
-    )
 
-
-def _first_unusual_token() -> Stage:
-    """Attach the first token below the frequency threshold (0.001) if present."""
-
+@register_step(
+    name="first_unusual_token",
+    description="Attach first token with rel_freq < 0.001 if present",
+    group="feature_engineering",
+    input_cols=["token_rel_freq_arr"],
+    output_cols=["first_unusual_token"],
+)
+def _first_unusual_token() -> str:
     first_token_expr = (
         "list_any_value(list_filter(token_rel_freq_arr, x -> x.rel_freq < 0.001))"
     )
-
-    sql = f"""
+    return f"""
     SELECT
         {first_token_expr} AS first_unusual_token,
         *
     FROM {{input}}
     """
-    step = CTEStep("1", sql)
-    return Stage(name="first_unusual_token", steps=[step])
 
 
-def _use_first_unusual_token_if_no_numeric_token() -> Stage:
-    """Fallback to the unusual token when numeric_token_1 is missing."""
-
-    sql = """
+@register_step(
+    name="use_first_unusual_token_if_no_numeric_token",
+    description="Fallback: use first_unusual_token if numeric_token_1 missing",
+    group="feature_engineering",
+    input_cols=["numeric_token_1", "token_rel_freq_arr", "first_unusual_token"],
+    output_cols=["numeric_token_1", "token_rel_freq_arr"],
+)
+def _use_first_unusual_token_if_no_numeric_token() -> str:
+    return """
     SELECT
         * EXCLUDE (numeric_token_1, token_rel_freq_arr, first_unusual_token),
         CASE
@@ -245,17 +232,21 @@ def _use_first_unusual_token_if_no_numeric_token() -> Stage:
         END AS token_rel_freq_arr
     FROM {input}
     """
-    step = CTEStep("1", sql)
-    return Stage(
-        name="use_first_unusual_token_if_no_numeric_token",
-        steps=[step],
-    )
 
 
-def _separate_unusual_tokens() -> Stage:
-    """Split token list into frequency bands for matching heuristics."""
-
-    sql = """
+@register_step(
+    name="separate_unusual_tokens",
+    description="Split token_rel_freq_arr into unusual/very/extremely_unusual arrays",
+    group="feature_engineering",
+    input_cols=["token_rel_freq_arr"],
+    output_cols=[
+        "unusual_tokens_arr",
+        "very_unusual_tokens_arr",
+        "extremely_unusual_tokens_arr",
+    ],
+)
+def _separate_unusual_tokens() -> str:
+    return """
     SELECT
         *,
         list_transform(
@@ -290,40 +281,33 @@ def _separate_unusual_tokens() -> Stage:
         ) AS extremely_unusual_tokens_arr
     FROM {input}
     """
-    step = CTEStep("1", sql)
-    return Stage(name="separate_unusual_tokens", steps=[step])
 
 
-def _generalised_token_aliases() -> Stage:
-    """Apply token aliasing/normalisation over distinguishing tokens."""
-
-    GENERALISED_TOKEN_ALIASES_CASE_STATEMENT = """
-        CASE
-            WHEN token in ('FIRST', 'SECOND', 'THIRD', 'TOP') THEN ['UPPERFLOOR', 'LEVEL']
-            WHEN token in ('GARDEN', 'GROUND') THEN ['GROUNDFLOOR', 'LEVEL']
-            WHEN token in ('BASEMENT') THEN ['LEVEL']
-            ELSE [TOKEN]
-        END
-    """
-
-    sql = f"""
-    SELECT
-        *,
-        flatten(
-            list_transform(distinguishing_adj_start_tokens, token ->
-               {GENERALISED_TOKEN_ALIASES_CASE_STATEMENT}
-            )
-        ) AS distinguishing_adj_token_aliases
-    FROM {{input}}
-    """
-    step = CTEStep("1", sql)
-    return Stage(name="generalised_token_aliases", steps=[step])
-
-
-def _final_column_order() -> Stage:
-    """Reorder and aggregate columns to match the legacy final layout."""
-
-    sql = """
+@register_step(
+    name="final_column_order",
+    description="Reorder columns and aggregate histograms for final output",
+    group="feature_engineering",
+    input_cols=[
+        "unique_id",
+        "numeric_token_1",
+        "numeric_token_2",
+        "numeric_token_3",
+        "token_rel_freq_arr",
+        "common_end_tokens",
+        "postcode",
+    ],
+    output_cols=[
+        "unique_id",
+        "numeric_token_1",
+        "numeric_token_2",
+        "numeric_token_3",
+        "token_rel_freq_arr_hist",
+        "common_end_tokens_hist",
+        "postcode",
+    ],
+)
+def _final_column_order() -> str:
+    return """
     SELECT
         unique_id,
         numeric_token_1,
@@ -343,13 +327,22 @@ def _final_column_order() -> Stage:
         )
     FROM {input}
     """
-    step = CTEStep("1", sql)
-    return Stage(name="final_column_order", steps=[step])
 
 
-def get_token_frequeny_table() -> Stage:
-    """Build a token frequency table from numeric and non-numeric tokens."""
-
+@register_step(
+    name="get_token_frequeny_table",
+    description="Compute token frequency table from concatenated numeric and non-numeric tokens",
+    group="analytics",
+    input_cols=[
+        "unique_id",
+        "numeric_token_1",
+        "numeric_token_2",
+        "numeric_token_3",
+        "address_without_numbers_tokenised",
+    ],
+    output_cols=["token", "rel_freq"],
+)
+def _get_token_frequeny_table() -> list[tuple[str, str]]:
     sql = """
     SELECT
         token_counts.token,
@@ -364,7 +357,6 @@ def get_token_frequeny_table() -> Stage:
     ) AS token_counts
     ORDER BY count DESC
     """
-
     concatenated_sql = """
     SELECT
         unique_id,
@@ -377,16 +369,12 @@ def get_token_frequeny_table() -> Stage:
         ) AS all_tokens
     FROM {input}
     """
-
     unnested_sql = """
     SELECT unnest(all_tokens) AS token
     FROM {concatenated_tokens}
     """
-
-    steps = [
-        CTEStep("concatenated_tokens", concatenated_sql),
-        CTEStep("unnested", unnested_sql),
-        CTEStep("final", sql),
+    return [
+        ("concatenated_tokens", concatenated_sql),
+        ("unnested", unnested_sql),
+        ("final", sql),
     ]
-
-    return Stage(name="get_token_frequeny_table", steps=steps, output="final")

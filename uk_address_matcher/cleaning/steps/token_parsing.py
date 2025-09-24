@@ -3,27 +3,19 @@ from uk_address_matcher.cleaning.steps.regexes import (
     remove_multiple_spaces,
     trim,
 )
-from uk_address_matcher.core.sql_pipeline import (
-    CTEStep,
-    Stage,
+from uk_address_matcher.core.pipeline_registry import register_step
+
+
+@register_step(
+    name="separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records",
+    description="Split address tokens into distinguishing vs common with respect to neighbors",
+    group="feature_engineering",
+    input_cols=["address_concat"],
+    output_cols=["distinguishing_adj_start_tokens", "common_adj_start_tokens"],
 )
-
-
 def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records() -> (
-    Stage
+    list[tuple[str, str]]
 ):
-    """
-    Identifies common suffixes between addresses and separates them into unique and common parts.
-    This function analyzes each address in relation to its neighbors (previous and next addresses
-    when sorted by unique_id) to find common suffix patterns. It then splits each address into:
-    - unique_tokens: The tokens that are unique to this address (typically the beginning part)
-    - common_tokens: The tokens that are shared with neighboring addresses (typically the end part)
-    Args:
-        ddb_pyrel (DuckDBPyRelation): The input relation
-        con (DuckDBPyConnection): The DuckDB connection
-    Returns:
-        DuckDBPyRelation: The modified table with unique_tokens and common_tokens fields
-    """
     tokens_sql = """
     SELECT
         ['FLAT', 'APARTMENT', 'UNIT'] AS __tokens_to_remove,
@@ -35,7 +27,6 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
         *
     FROM {input}
     """
-
     neighbors_sql = """
     SELECT
         lag(__tokens) OVER (ORDER BY row_order) AS __prev_tokens,
@@ -43,7 +34,6 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
         *
     FROM {tokens}
     """
-
     suffix_lengths_sql = """
     SELECT
         len(__tokens) AS __token_count,
@@ -66,7 +56,6 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
         *
     FROM {with_neighbors}
     """
-
     unique_parts_sql = """
     SELECT
         *,
@@ -81,7 +70,6 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
         ) AS common_tokens
     FROM {with_suffix_lengths}
     """
-
     final_sql = """
     SELECT
         * EXCLUDE (
@@ -101,34 +89,24 @@ def _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records(
         COALESCE(common_tokens, ARRAY[]) AS common_adj_start_tokens
     FROM {with_unique_parts}
     """
-
-    steps = [
-        CTEStep("tokens", tokens_sql),
-        CTEStep("with_neighbors", neighbors_sql),
-        CTEStep("with_suffix_lengths", suffix_lengths_sql),
-        CTEStep("with_unique_parts", unique_parts_sql),
-        CTEStep("final", final_sql),
+    return [
+        ("tokens", tokens_sql),
+        ("with_neighbors", neighbors_sql),
+        ("with_suffix_lengths", suffix_lengths_sql),
+        ("with_unique_parts", unique_parts_sql),
+        ("final", final_sql),
     ]
 
-    return Stage(
-        name="separate_distinguishing_start_tokens_from_with_respect_to_adjacent_recrods",
-        steps=steps,
-        output="final",
-    )
 
-
-def _parse_out_flat_position_and_letter() -> Stage:
-    """
-    Extracts flat positions and letters from address strings into separate columns.
-
-
-    Args:
-        ddb_pyrel: The input relation
-        con: The DuckDB connection
-
-    Returns:
-        DuckDBPyRelation: The modified table with flat_positional and flat_letter fields
-    """
+@register_step(
+    name="parse_out_flat_position_and_letter",
+    description="Extract flat positional information and letter from address",
+    group="feature_engineering",
+    input_cols=["address_concat"],
+    output_cols=["flat_positional", "flat_letter"],
+)
+def _parse_out_flat_position_and_letter() -> list[tuple[str, str]]:
+    """Extract flat positional information and letter from address (multi-CTE)."""
     floor_positions = r"\b(BASEMENT|GROUND FLOOR|FIRST FLOOR|SECOND FLOOR|THIRD FLOOR|TOP FLOOR|GARDEN)\b"
     flat_letter = r"\b\d{0,4}([A-Za-z])\b"
     leading_letter = r"^\s*\d+([A-Za-z])\b"
@@ -163,31 +141,21 @@ def _parse_out_flat_position_and_letter() -> Stage:
     FROM {extract_step}
     """
 
-    steps = [
-        CTEStep("extract_step", extract_sql),
-        CTEStep("final", final_sql),
+    return [
+        ("extract_step", extract_sql),
+        ("final", final_sql),
     ]
 
-    return Stage(name="parse_out_flat_position_and_letter", steps=steps, output="final")
 
-
-def _parse_out_numbers() -> Stage:
-    """
-    Extracts and processes numeric tokens from address strings, ensuring the max length
-    of the number+letter is 6 with no more than 1 letter which can be at the start or end.
-    It also captures ranges like '1-2', '12-17', '98-102' as a single 'number', and
-    matches patterns like '20A', 'A20', '20', and '20-21'.
-
-    Special case: If flat_letter is a number, the first number found will be ignored
-    as it's likely a duplicate of the flat number.
-
-    Args:
-        table_name (str): The name of the table to process.
-        con (DuckDBPyConnection): The DuckDB connection.
-
-    Returns:
-        DuckDBPyRelation: The modified table with processed fields.
-    """
+@register_step(
+    name="parse_out_numbers",
+    description="Parse and remove numeric tokens from address, producing address_without_numbers and numeric_tokens",
+    group="feature_engineering",
+    input_cols=["address_concat", "flat_letter"],
+    output_cols=["address_without_numbers", "numeric_tokens"],
+)
+def _parse_out_numbers() -> str:
+    """Extract and process numeric tokens from address_concat."""
     regex_pattern = (
         r"\b"  # Word boundary
         # Prioritize matching number ranges first
@@ -206,11 +174,17 @@ def _parse_out_numbers() -> Stage:
         END AS numeric_tokens
     FROM {{input}}
     """
-    step = CTEStep("1", sql)
-    return Stage(name="parse_out_numbers", steps=[step])
+    return sql
 
 
-def _clean_address_string_second_pass() -> Stage:
+@register_step(
+    name="clean_address_string_second_pass",
+    description="Second pass cleaning on address_without_numbers (spacing, trim)",
+    group="cleaning",
+    input_cols=["address_without_numbers"],
+    output_cols=["address_without_numbers"],
+)
+def _clean_address_string_second_pass() -> str:
     fn_call = construct_nested_call(
         "address_without_numbers",
         [remove_multiple_spaces, trim],
@@ -221,33 +195,9 @@ def _clean_address_string_second_pass() -> Stage:
         {fn_call} as address_without_numbers
     from {{input}}
     """
-    step = CTEStep("1", sql)
-    return Stage(name="clean_address_string_second_pass", steps=[step])
+    return sql
 
-
-def _split_numeric_tokens_to_cols() -> Stage:
-    sql = """
-    SELECT
-        * EXCLUDE (numeric_tokens),
-        regexp_extract_all(array_to_string(numeric_tokens, ' '), '\\d+')[1] as numeric_token_1,
-        regexp_extract_all(array_to_string(numeric_tokens, ' '), '\\d+')[2] as numeric_token_2,
-        regexp_extract_all(array_to_string(numeric_tokens, ' '), '\\d+')[3] as numeric_token_3
-    FROM {input}
-    """
-    step = CTEStep("1", sql)
-    return Stage(name="split_numeric_tokens_to_cols", steps=[step])
-
-
-def _tokenise_address_without_numbers() -> Stage:
-    sql = """
-    select
-        * exclude (address_without_numbers),
-        regexp_split_to_array(trim(address_without_numbers), '\\s+')
-            AS address_without_numbers_tokenised
-    from {input}
-    """
-    step = CTEStep("1", sql)
-    return Stage(name="tokenise_address_without_numbers", steps=[step])
+    # legacy duplicates removed: split_numeric_tokens_to_cols, tokenise_address_without_numbers
 
 
 GENERALISED_TOKEN_ALIASES_CASE_STATEMENT = """
@@ -261,40 +211,14 @@ GENERALISED_TOKEN_ALIASES_CASE_STATEMENT = """
 """
 
 
-def _generalised_token_aliases() -> Stage:
-    """
-    Maps specific tokens to more general categories to create a generalised representation
-    of the unique tokens in an address.
-
-    The idea is to guide matches away from implausible matches and towards
-    possible matches
-
-    The real tokens always take precidence over genearlised
-
-    For example sometimes a 2nd floor flat will match to top floor.  Whilst 'top floor'
-    is often ambiguous (is the 2nd floor the top floor), we know that
-    'top floor' cannot match to 'ground' or 'basement'
-
-    This function applies the following mappings:
-
-    [FIRST, SECOND, THIRD, TOP] -> [UPPERFLOOR, LEVEL]
-
-    [GARDEN, GROUND] -> [GROUNDFLOOR, LEVEL]
-
-
-    This function applies the following mappings:
-    - Single letters (A-E) -> UNIT_NUM_LET
-    - Single digits (1-5) -> UNIT_NUM_LET
-    - Floor indicators (FIRST, SECOND, THIRD) -> LEVEL
-    - Position indicators (TOP, FIRST, SECOND, THIRD) -> TOP
-    The following tokens are filtered out completely:
-    - FLAT, APARTMENT, UNIT
-    Args:
-        ddb_pyrel (DuckDBPyRelation): The input relation with unique_tokens field
-        con (DuckDBPyConnection): The DuckDB connection
-    Returns:
-        DuckDBPyRelation: The modified table with generalised_unique_tokens field
-    """
+@register_step(
+    name="generalised_token_aliases",
+    description="Apply token aliasing to distinguishing_adj_start_tokens",
+    group="feature_engineering",
+    input_cols=["distinguishing_adj_start_tokens"],
+    output_cols=["distinguishing_adj_token_aliases"],
+)
+def _generalised_token_aliases() -> str:
     sql = f"""
     SELECT
         *,
@@ -305,11 +229,10 @@ def _generalised_token_aliases() -> Stage:
         ) AS distinguishing_adj_token_aliases
     FROM {{input}}
     """
-    step = CTEStep("1", sql)
-    return Stage(name="generalised_token_aliases", steps=[step])
+    return sql
 
 
-def _get_token_frequeny_table() -> Stage:
+def _get_token_frequeny_table():
     """Moved to term_frequencies module; kept for backward-compat imports."""
     raise NotImplementedError(
         "Use uk_address_matcher.cleaning.steps.term_frequencies.get_token_frequeny_table instead"

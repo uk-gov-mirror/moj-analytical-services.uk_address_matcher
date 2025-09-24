@@ -1,10 +1,17 @@
 from __future__ import annotations
 
-from uk_address_matcher.core.sql_pipeline import CTEStep, Stage
+from uk_address_matcher.core.pipeline_registry import register_step
 
 
-def _split_numeric_tokens_to_cols() -> Stage:
-    sql = """
+@register_step(
+    name="split_numeric_tokens_to_cols",
+    description="Extract up to three numeric tokens from numeric_tokens array",
+    group="feature_engineering",
+    input_cols=["numeric_tokens"],
+    output_cols=["numeric_token_1", "numeric_token_2", "numeric_token_3"],
+)
+def _split_numeric_tokens_to_cols() -> str:
+    return """
     SELECT
         * EXCLUDE (numeric_tokens),
         regexp_extract_all(array_to_string(numeric_tokens, ' '), '\\d+')[1] as numeric_token_1,
@@ -12,17 +19,20 @@ def _split_numeric_tokens_to_cols() -> Stage:
         regexp_extract_all(array_to_string(numeric_tokens, ' '), '\\d+')[3] as numeric_token_3
     FROM {input}
     """
-    step = CTEStep("1", sql)
-    return Stage(name="split_numeric_tokens_to_cols", steps=[step])
 
 
-def _tokenise_address_without_numbers() -> Stage:
-    sql = """
+@register_step(
+    name="tokenise_address_without_numbers",
+    description="Tokenise address_without_numbers into an array",
+    group="feature_engineering",
+    input_cols=["address_without_numbers"],
+    output_cols=["address_without_numbers_tokenised"],
+)
+def _tokenise_address_without_numbers() -> str:
+    return """
     select
         * exclude (address_without_numbers),
         regexp_split_to_array(trim(address_without_numbers), '\\s+')
             AS address_without_numbers_tokenised
     from {input}
     """
-    step = CTEStep("1", sql)
-    return Stage(name="tokenise_address_without_numbers", steps=[step])

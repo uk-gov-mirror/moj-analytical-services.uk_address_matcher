@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Final
-
 from uk_address_matcher.cleaning.steps.regexes import (
     construct_nested_call,
     move_flat_to_front,
@@ -13,51 +11,78 @@ from uk_address_matcher.cleaning.steps.regexes import (
     standarise_num_letter,
     trim,
 )
-from uk_address_matcher.core.sql_pipeline import Stage, single_cte_stage
+from uk_address_matcher.core.pipeline_registry import register_step
 
 
-def _trim_whitespace_address_and_postcode() -> Stage:
-    sql = r"""
+# -------- Enhanced registered steps (new system, private only) --------
+@register_step(
+    name="trim_whitespace_address_and_postcode",
+    description="Trim whitespace from address and postcode",
+    group="cleaning",
+    input_cols=["address_concat", "postcode"],
+    output_cols=["address_concat", "postcode"],
+)
+def _trim_whitespace_address_and_postcode() -> str:
+    return r"""
     SELECT
         * EXCLUDE (address_concat, postcode),
         TRIM(address_concat) AS address_concat,
         TRIM(postcode)       AS postcode
     FROM {input}
     """
-    return single_cte_stage("trim_whitespace_address_and_postcode", sql)
 
 
-def _canonicalise_postcode() -> Stage:
-    """
-    Ensures that any postcode matching the UK format has a single space
-    separating the outward and inward codes. Assumes 'postcode' is trimmed and uppercased.
-    """
-    uk_postcode_regex: Final[str] = r"^([A-Z]{1,2}\d[A-Z\d]?|GIR)\s*(\d[A-Z]{2})$"
-    sql = f"""
-    SELECT
-        * EXCLUDE (postcode),
-        regexp_replace(
-            postcode,
-            '{uk_postcode_regex}',
-            '\\1 \\2'
-        ) AS postcode
-    FROM {{input}}
-    """
-    return single_cte_stage("canonicalise_postcode", sql)
-
-
-def _upper_case_address_and_postcode() -> Stage:
-    sql = r"""
+@register_step(
+    name="upper_case_address_and_postcode",
+    description="Upper-case normalisation for address and postcode",
+    group="cleaning",
+    input_cols=["address_concat", "postcode"],
+    output_cols=["address_concat", "postcode"],
+)
+def _upper_case_address_and_postcode() -> str:
+    return r"""
     SELECT
         * EXCLUDE (address_concat, postcode),
         UPPER(address_concat) AS address_concat,
         UPPER(postcode)       AS postcode
     FROM {input}
     """
-    return single_cte_stage("upper_case_address_and_postcode", sql)
 
 
-def _clean_address_string_first_pass() -> Stage:
+@register_step(
+    name="canonicalise_postcode",
+    description="Ensure UK postcode has a single space between outward and inward codes",
+    group="cleaning",
+    input_cols=["postcode"],
+    output_cols=["postcode"],
+    depends_on=[
+        "trim_whitespace_address_and_postcode",
+        "upper_case_address_and_postcode",
+    ],
+)
+def _canonicalise_postcode() -> str:
+    uk_postcode_regex: str = r"^([A-Z]{1,2}\d[A-Z\d]?|GIR)\s*(\d[A-Z]{2})$"
+    return f"""
+    SELECT
+        * EXCLUDE (postcode),
+        regexp_replace(
+            postcode,
+            '{uk_postcode_regex}',
+            -- Reformat with single space
+            '\\1 \\2'
+        ) AS postcode
+    FROM {{input}}
+    """
+
+
+@register_step(
+    name="clean_address_string_first_pass",
+    description="First pass cleaning on address_concat (punctuation, spacing, standardisation)",
+    group="cleaning",
+    input_cols=["address_concat"],
+    output_cols=["address_concat"],
+)
+def _clean_address_string_first_pass() -> str:
     fn_call = construct_nested_call(
         "address_concat",
         [
@@ -65,29 +90,30 @@ def _clean_address_string_first_pass() -> Stage:
             remove_apostrophes,
             remove_multiple_spaces,
             replace_fwd_slash_with_dash,
-            # standarise_num_dash_num,  # left commented as in original
             separate_letter_num,
             standarise_num_letter,
             move_flat_to_front,
-            # remove_repeated_tokens,   # left commented as in original
             trim,
         ],
     )
-    sql = f"""
+    return f"""
     SELECT
         * EXCLUDE (address_concat),
         {fn_call} AS address_concat
     FROM {{input}}
     """
-    return single_cte_stage("clean_address_string_first_pass", sql)
 
 
-def _remove_duplicate_end_tokens() -> Stage:
-    """
-    Removes duplicated tokens at the end of the address.
-    E.g. 'HIGH STREET ST ALBANS ST ALBANS' -> 'HIGH STREET ST ALBANS'
-    """
-    sql = r"""
+@register_step(
+    name="remove_duplicate_end_tokens",
+    description="Remove duplicated trailing tokens from address_concat",
+    group="cleaning",
+    input_cols=["address_concat"],
+    output_cols=["address_concat"],
+    depends_on=["clean_address_string_first_pass"],
+)
+def _remove_duplicate_end_tokens() -> str:
+    return r"""
     WITH tokenised AS (
         SELECT *, string_split(address_concat, ' ') AS cleaned_tokenised
         FROM {input}
@@ -106,28 +132,19 @@ def _remove_duplicate_end_tokens() -> Stage:
         END AS address_concat
     FROM tokenised
     """
-    return single_cte_stage("remove_duplicate_end_tokens", sql)
 
 
-def _derive_original_address_concat() -> Stage:
-    sql = r"""
+@register_step(
+    name="derive_original_address_concat",
+    description="Copy address_concat to original_address_concat",
+    group="cleaning",
+    input_cols=["address_concat"],
+    output_cols=["original_address_concat"],
+)
+def _derive_original_address_concat() -> str:
+    return r"""
     SELECT
         *,
         address_concat AS original_address_concat
     FROM {input}
     """
-    return single_cte_stage("derive_original_address_concat", sql)
-
-
-def _clean_address_string_second_pass() -> Stage:
-    fn_call = construct_nested_call(
-        "address_without_numbers",
-        [remove_multiple_spaces, trim],
-    )
-    sql = f"""
-    SELECT
-        * EXCLUDE (address_without_numbers),
-        {fn_call} AS address_without_numbers
-    FROM {{input}}
-    """
-    return single_cte_stage("clean_address_string_second_pass", sql)
