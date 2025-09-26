@@ -1,6 +1,10 @@
+import logging
+
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
-from splink import Linker
 from IPython.display import display
+from splink import Linker
+
+logger = logging.getLogger("uk_address_matcher")
 
 
 CLEANED_COLS_TO_SELECT = """
@@ -79,7 +83,7 @@ def inspect_match_results_vs_labels(
         if result:
             target_unique_id_r = result[0]
         else:
-            print(
+            logger.error(
                 f"Error: Could not find false positive example number {example_number}."
             )
             for name in temp_tables:
@@ -157,16 +161,18 @@ Distinguishability:           {distinguishability_value}
         messy_address=row_dict_best_match.get("address_concat_r", "N/A"),
         best_match_address=row_dict_best_match.get("original_address_concat_l", "N/A"),
         true_match_address=row_dict_best_match.get("label_address_concat", "N/A"),
-        distinguishability_value=f"{row_dict_best_match.get('distinguishability', 'N/A'):,.2f}"
-        if row_dict_best_match.get("distinguishability") is not None
-        else "N/A",
+        distinguishability_value=(
+            f"{row_dict_best_match.get('distinguishability', 'N/A'):,.2f}"
+            if row_dict_best_match.get("distinguishability") is not None
+            else "N/A"
+        ),
         messy_postcode=row_dict_best_match.get("postcode_r", ""),
         best_match_postcode=row_dict_best_match.get("postcode_l", ""),
         true_match_postcode=row_dict_best_match.get("label_postcode", ""),
         best_match_uprn=row_dict_best_match.get("unique_id_l", "N/A"),
         true_match_uprn=row_dict_best_match.get("correct_unique_id", "N/A"),
     )
-    print(report)
+    logger.info(report)
 
     sql = f"""
     SELECT
@@ -224,7 +230,7 @@ Waterfall chart for messy address vs best match:
 {messy_address} {messy_postcode}
 {best_match_address} {best_match_postcode}
 """
-        print(
+        logger.info(
             waterfall_header.format(
                 messy_address=row_dict_best_match.get("address_concat_r", "N/A"),
                 messy_postcode=row_dict_best_match.get("postcode_r", ""),
@@ -256,7 +262,7 @@ Waterfall chart for messy address vs true match:
 {messy_address} {messy_postcode}
 {true_match_address} {true_match_postcode}
 """
-        print(
+        logger.info(
             waterfall_header.format(
                 messy_address=row_dict_best_match.get("address_concat_r", "N/A"),
                 messy_postcode=row_dict_best_match.get("postcode_r", ""),

@@ -1,33 +1,26 @@
-# tests/test_accuracy_from_labels.py
+import logging
 from pathlib import Path
+
 import duckdb
-import pytest  # Still useful for pytest.fail if needed
 
 from tests.utils import prepare_combined_test_data
 
 # Import necessary functions from the library
 from uk_address_matcher import (
     clean_data_using_precomputed_rel_tok_freq,
-    get_linker,
     evaluate_predictions_against_labels,
+    get_linker,
     inspect_match_results_vs_labels,
-)
-from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
-    improve_predictions_using_distinguishing_tokens,
 )
 from uk_address_matcher.linking_model.training import get_settings_for_training
 from uk_address_matcher.post_linkage.analyse_results import (
     best_matches_with_distinguishability,
 )
+from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
+    improve_predictions_using_distinguishing_tokens,
+)
 
-# Assuming IPython.display is mocked or not strictly needed for test validation
-try:
-    from IPython.display import display
-except ImportError:
-    # Create a dummy display function if IPython is not available
-    def display(x):
-        # Simple print instead of actual display for testing purposes
-        print("Display (mock):", type(x))  # Print type to show it was called
+logger = logging.getLogger("uk_address_matcher")
 
 
 def test_address_matching_workflow_runs():
@@ -41,7 +34,8 @@ def test_address_matching_workflow_runs():
         yaml_path, duckdb_con
     )
 
-    labels_rel = duckdb_con.sql("""
+    labels_rel = duckdb_con.sql(
+        """
         SELECT
             unique_id,
             true_match_id::VARCHAR AS correct_unique_id
@@ -49,7 +43,8 @@ def test_address_matching_workflow_runs():
             SELECT * FROM messy_addresses_raw
         )
         WHERE true_match_id IS NOT NULL
-    """)
+    """
+    )
 
     df_os_rel = canonical_addresses_raw
     messy_data_rel = messy_addresses_raw
@@ -74,9 +69,7 @@ def test_address_matching_workflow_runs():
         settings=settings,
     )
 
-    df_predict = linker.inference.predict(
-        threshold_match_weight=-20
-    )
+    df_predict = linker.inference.predict(threshold_match_weight=-20)
     df_predict_rel = df_predict.as_duckdbpyrelation()
 
     df_predict_improved_rel = improve_predictions_using_distinguishing_tokens(
@@ -100,7 +93,7 @@ def test_address_matching_workflow_runs():
         df_predict_with_distinguishability=df_predict_with_distinguishability_rel,
         con=duckdb_con,
     )
-    print("Evaluation Results:")
+    logger.info("Evaluation Results:")
     evaluation_results_rel.show()
 
     inspect_match_results_vs_labels(
