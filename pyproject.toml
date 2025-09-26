@@ -40,6 +40,13 @@ include = ["uk_address_matcher*"]
 # See https://github.com/pypa/setuptools/issues/4759
 exclude = ["secret_data*", "_LICENSE.md"]
 
-
 [tool.setuptools]
 include-package-data = true
+
+[tool.pytest.ini_options]
+python_files = "test_*.py"
+pythonpath = ["src"]
+
+# log level settings used when running pytest
+log_cli = true
+log_cli_level = "INFO"
