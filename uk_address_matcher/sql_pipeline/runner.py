@@ -123,7 +123,7 @@ def render_step_to_ctes(
     step_idx: int,
     prev_alias: str,
     alias_map: Dict[str, str],
-) -> Tuple[List[Tuple[str, str]], str]:
+) -> Tuple[List[Tuple[str, str]], str, str]:
     """Instantiate templated fragments into concrete, namespaced CTEs."""
 
     ctes: List[Tuple[str, str]] = []
@@ -141,8 +141,13 @@ def render_step_to_ctes(
         ctes.append((sql, alias))
         frag_aliases[frag.name] = alias
 
-    out_alias = frag_aliases[step.output or step.steps[-1].name]
-    return ctes, out_alias
+    default_output_name = step.steps[-1].name
+    if step.output and step.output in frag_aliases:
+        out_alias = frag_aliases[step.output]
+    else:
+        out_alias = frag_aliases[default_output_name]
+
+    return ctes, out_alias, frag_aliases[default_output_name]
 
 
 @dataclass
@@ -385,7 +390,7 @@ class DuckDBPipeline(CTEPipeline):
 
         prev_alias = self.output_table_name
         step_idx = self._step_counter
-        ctes, out_alias = render_step_to_ctes(
+        ctes, out_alias, default_alias = render_step_to_ctes(
             step,
             step_idx,
             prev_alias,
@@ -395,6 +400,14 @@ class DuckDBPipeline(CTEPipeline):
             self.enqueue_sql(sql, alias)
         self._current_output_alias = out_alias
         self._step_counter += 1
+
+        if step.output:
+            self._input_alias_map[step.output] = out_alias
+            last_step_name = step.steps[-1].name
+            self._input_alias_map.setdefault(last_step_name, default_alias)
+        else:
+            last_step_name = step.steps[-1].name
+            self._input_alias_map[last_step_name] = default_alias
 
         if step.checkpoint:
             self._materialise_checkpoint()
@@ -466,6 +479,9 @@ class DuckDBPipeline(CTEPipeline):
                 _emit_debug(f"\n=== DEBUG STEP {idx}/{total} — alias `{alias}` ===\n")
                 _emit_debug(_pretty_sql(sql))
                 _emit_debug("\n--------------------------------------------\n")
+            # TODO(ThomasHepworth): ParserException: Parser Error: syntax error at or near "{"
+            # is a common error, typically indicating that a placeholder wasn't replaced
+            # correctly. There are various ways we could try to catch this earlier.
             self.con.execute(f"CREATE OR REPLACE TEMP TABLE {alias} AS {sql}")
             rel = self.con.table(alias)
             if max_rows is not None:
