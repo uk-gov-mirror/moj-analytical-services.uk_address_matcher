@@ -489,6 +489,8 @@ class DuckDBPipeline(CTEPipeline):
             else:
                 rel.show()
 
+            _emit_debug(f"Total rows: {rel.count('*')}")
+
         if return_last:
             return self.con.table(work_items[-1][1])
         return None
