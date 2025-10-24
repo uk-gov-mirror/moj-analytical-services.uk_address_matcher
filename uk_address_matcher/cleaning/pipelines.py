@@ -4,6 +4,7 @@ from typing import Optional
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
 from uk_address_matcher.cleaning.steps import (
+    _assign_ukam_address_id,
     _add_match_reason_enum_field,
     _add_term_frequencies_to_address_tokens,
     _add_term_frequencies_to_address_tokens_using_registered_df,
@@ -34,6 +35,7 @@ from uk_address_matcher.sql_pipeline.runner import DebugOptions, create_sql_pipe
 
 QUEUE_PRE_TF = [
     _add_match_reason_enum_field,
+    _assign_ukam_address_id,
     _trim_whitespace_address_and_postcode,
     _upper_case_address_and_postcode,
     _canonicalise_postcode,

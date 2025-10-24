@@ -35,6 +35,8 @@ def _prepare_splink_candidates(
             f"AND distinguishability >= {distinguishability_threshold}"
         )
 
+    # _r = record from addresses to match (fuzzy)
+    # _l = record from addresses to search within (canonical)
     ranked_sql = f"""
         SELECT
             unique_id_r,
@@ -88,30 +90,52 @@ def _combine_exact_and_splink_matches(
         FROM {canonical_addresses}
     """
 
-    final_sql = f"""
+    combined_sql = f"""
         SELECT
             em.unique_id,
-            COALESCE(st.resolved_canonical_id, em.resolved_canonical_id) AS resolved_canonical_id,
             em.original_address_concat,
-            canon.original_address_concat_canonical,
             em.postcode,
-            COALESCE(
-                st.match_reason,
-                em.match_reason,
-                '{unmatched_label}'::ENUM({enum_literal})
-            ) AS match_reason,
-            st.match_weight,
-            st.distinguishability
+            CASE
+                WHEN em.match_reason <> '{unmatched_label}'::ENUM({enum_literal}) THEN em.resolved_canonical_id
+                ELSE st.resolved_canonical_id
+            END AS resolved_canonical_id,
+            CASE
+                WHEN em.match_reason <> '{unmatched_label}'::ENUM({enum_literal}) THEN em.match_reason
+                WHEN st.match_reason IS NOT NULL THEN st.match_reason
+                ELSE '{unmatched_label}'::ENUM({enum_literal})
+            END AS match_reason,
+            CASE
+                WHEN em.match_reason <> '{unmatched_label}'::ENUM({enum_literal}) THEN NULL
+                ELSE st.match_weight
+            END AS match_weight,
+            CASE
+                WHEN em.match_reason <> '{unmatched_label}'::ENUM({enum_literal}) THEN NULL
+                ELSE st.distinguishability
+            END AS distinguishability
         FROM {{exact_matches}} AS em
         LEFT JOIN {{input}} AS st
             ON st.unique_id = em.unique_id
-        LEFT JOIN {{canonical_projection}} AS canon
-            ON canon.resolved_canonical_id = COALESCE(st.resolved_canonical_id, em.resolved_canonical_id)
-        ORDER BY em.unique_id
+    """
+
+    final_sql = """
+        SELECT
+            combined.unique_id,
+            combined.resolved_canonical_id,
+            combined.original_address_concat,
+            canon.original_address_concat_canonical,
+            combined.postcode,
+            combined.match_reason,
+            combined.match_weight,
+            combined.distinguishability
+        FROM {combined_matches} AS combined
+        LEFT JOIN {canonical_projection} AS canon
+            ON canon.resolved_canonical_id = combined.resolved_canonical_id
+        ORDER BY combined.unique_id
     """
 
     return [
         CTEStep("canonical_projection", canonical_sql),
+        CTEStep("combined_matches", combined_sql),
         CTEStep("match_candidates", final_sql),
     ]
 

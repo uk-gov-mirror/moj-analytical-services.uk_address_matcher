@@ -18,6 +18,21 @@ from uk_address_matcher.sql_pipeline.steps import pipeline_stage
 
 
 @pipeline_stage(
+    name="assign_ukam_address_id",
+    description="Generate a surrogate identifier to guarantee uniqueness of UID",
+    tags=["data_preparation"],
+)
+def _assign_ukam_address_id() -> str:
+    sql = r"""
+    SELECT
+        *,
+       ROW_NUMBER() OVER () AS ukam_address_id
+    FROM {input}
+    """
+    return sql
+
+
+@pipeline_stage(
     name="trim_whitespace_address_and_postcode",
     description="Remove leading and trailing whitespace from address and postcode fields",
     tags=["normalisation", "cleaning"],
@@ -175,7 +190,7 @@ def _clean_address_string_second_pass() -> str:
 @pipeline_stage(
     name="add_match_reason_enum_field",
     description="Add a `match_reason` field with ENUM type to categorise match outcomes",
-    tags=["data_preparation", "match_logic"],
+    tags=["data_preparation"],
 )
 def _add_match_reason_enum_field() -> str:
     return f"""

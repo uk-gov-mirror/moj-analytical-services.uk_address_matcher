@@ -66,8 +66,8 @@ def best_matches_with_distinguishability(
         df_predict: table containing pairwise predictions from either
             `linker.inference.predict` or
             `improve_predictions_using_distinguishing_tokens`
-        df_addresses_to_match: raw table containing addresses to be matched
-            in pre-cleaned form cols = (unique_id, address_concat, postcode)
+        df_addresses_to_match: table containing addresses to be matched in
+            cleaned form cols = (unique_id, ukam_address_id, address_concat, postcode)
         con: DuckDB connection for executing SQL queries
         distinguishability_thresholds: List of thresholds for categorizing match
             distinguishability. Default is [1, 5, 10].
@@ -146,7 +146,9 @@ def best_matches_with_distinguishability(
     SELECT
         a.unique_id AS unique_id_r,
         t.unique_id_l,
-        a.address_concat AS address_concat_r,
+        a.ukam_address_id AS ukam_address_id_r,
+        t.ukam_address_id_l,
+        a.original_address_concat AS address_concat_r,
         a.postcode AS postcode_r,
         t.original_address_concat_l,
         t.postcode_l,
@@ -156,7 +158,7 @@ def best_matches_with_distinguishability(
         {add_cols_select}
     FROM addresses_to_match AS a
     LEFT JOIN categorized_matches AS t
-    ON a.unique_id = t.unique_id_r
+    ON a.ukam_address_id = t.ukam_address_id_r
     {sort_str}
     """
 
@@ -179,8 +181,8 @@ def best_matches_summary(
         df_predict: Table containing pairwise predictions from either
             `linker.inference.predict` or
             `improve_predictions_using_distinguishing_tokens`
-        df_addresses_to_match: Raw table containing addresses to be matched
-            in pre-cleaned form cols = (unique_id, address_concat, postcode)
+        df_addresses_to_match: table containing addresses to be matched in
+            cleaned form cols = (unique_id, ukam_address_id, address_concat, postcode)
         con: DuckDB connection for executing SQL queries
         disinguishability_thresholds: List of thresholds for categorizing match
             distinguishability. Default is [1, 5, 10].

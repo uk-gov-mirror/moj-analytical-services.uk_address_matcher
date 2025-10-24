@@ -15,80 +15,6 @@ def enum_values() -> str:
 
 
 @pytest.fixture
-def dedupe_input_bindings(duck_con, enum_values) -> list[InputBinding]:
-    duck_con.execute(
-        f"""
-        CREATE OR REPLACE TABLE fuzzy_addresses AS
-        SELECT *
-        FROM (
-            VALUES
-                (
-                    1,
-                    '1 Imaginary Farm Lane',
-                    'ZZ1 1ZZ',
-                    NULL::BIGINT,
-                    ARRAY['1', 'imaginary', 'farm', 'lane'],
-                    'unmatched'::ENUM {enum_values}
-                ),
-                (
-                    2,
-                    '22 Placeholder Business Park North',
-                    'YY9 9YY',
-                    NULL::BIGINT,
-                    ARRAY['22', 'placeholder', 'business', 'park', 'north'],
-                    'unmatched'::ENUM {enum_values}
-                )
-        ) AS t(
-            unique_id,
-            original_address_concat,
-            postcode,
-            resolved_canonical_id,
-            address_tokens,
-            match_reason
-        )
-        """
-    )
-
-    duck_con.execute(
-        """
-        CREATE OR REPLACE TABLE canonical_addresses AS
-        SELECT *
-        FROM (
-            VALUES
-                (
-                    100,
-                    '1 Imaginary Farm Lane',
-                    'ZZ1 1ZZ',
-                    ARRAY['1', 'imaginary', 'farm', 'lane']
-                ),
-                (
-                    101,
-                    '1 Imaginary Farm Lane',
-                    'ZZ1 1ZZ',
-                    ARRAY['1', 'imaginary', 'farm', 'lane']
-                ),
-                (
-                    200,
-                    '22 Placeholder Business Park North',
-                    'YY9 9YY',
-                    ARRAY['22', 'placeholder', 'business', 'park', 'north']
-                )
-        ) AS t(
-            unique_id,
-            original_address_concat,
-            postcode,
-            address_tokens
-        )
-        """
-    )
-
-    return [
-        InputBinding("fuzzy_addresses", duck_con.table("fuzzy_addresses")),
-        InputBinding("canonical_addresses", duck_con.table("canonical_addresses")),
-    ]
-
-
-@pytest.fixture
 def trie_input_bindings(duck_con, enum_values) -> list[InputBinding]:
     duck_con.execute(
         f"""
@@ -102,7 +28,35 @@ def trie_input_bindings(duck_con, enum_values) -> list[InputBinding]:
                     'CC3 3CC',
                     NULL::BIGINT,
                     ARRAY['4', 'sample', 'street'],
-                    'unmatched'::ENUM {enum_values}
+                    'unmatched'::ENUM {enum_values},
+                    1::BIGINT
+                ),
+                (
+                    10,
+                    '4 Sample Street',
+                    'CC3 3CC',
+                    NULL::BIGINT,
+                    ARRAY['4', 'sample', 'street'],
+                    'unmatched'::ENUM {enum_values},
+                    2::BIGINT
+                ),
+                (
+                    2,
+                    '5 Demo Rd',
+                    'DD4 4DD',
+                    NULL::BIGINT,
+                    ARRAY['5', 'demo', 'rd'],
+                    'unmatched'::ENUM {enum_values},
+                    3::BIGINT
+                ),
+                (
+                    2,
+                    '5 Demo Rd',
+                    'DD4 4DD',
+                    NULL::BIGINT,
+                    ARRAY['5', 'demo', 'rd'],
+                    'unmatched'::ENUM {enum_values},
+                    4::BIGINT
                 ),
                 (
                     2,
@@ -110,7 +64,35 @@ def trie_input_bindings(duck_con, enum_values) -> list[InputBinding]:
                     'DD4 4DD',
                     NULL::BIGINT,
                     ARRAY['5', 'demo', 'road'],
-                    'unmatched'::ENUM {enum_values}
+                    'unmatched'::ENUM {enum_values},
+                    5::BIGINT
+                ),
+                (
+                    2,
+                    '5 Demo Road',
+                    'DD4 4DD',
+                    NULL::BIGINT,
+                    ARRAY['5', 'demo', 'road'],
+                    'unmatched'::ENUM {enum_values},
+                    6::BIGINT
+                ),
+                (
+                    2,
+                    '4 Sample St',
+                    'CC3 3CC',
+                    NULL::BIGINT,
+                    ARRAY['4', 'sample', 'st'],
+                    'unmatched'::ENUM {enum_values},
+                    7::BIGINT
+                ),
+                (
+                    3,
+                    '999 Mystery Lane',
+                    'EE5 5EE',
+                    NULL::BIGINT,
+                    ARRAY['999', 'mystery', 'lane'],
+                    'unmatched'::ENUM {enum_values},
+                    8::BIGINT
                 )
         ) AS t(
             unique_id,
@@ -118,7 +100,8 @@ def trie_input_bindings(duck_con, enum_values) -> list[InputBinding]:
             postcode,
             resolved_canonical_id,
             address_tokens,
-            match_reason
+            match_reason,
+            ukam_address_id
         )
         """
     )
@@ -133,19 +116,22 @@ def trie_input_bindings(duck_con, enum_values) -> list[InputBinding]:
                     1000,
                     '4 Sample Street',
                     'CC3 3CC',
-                    ARRAY['4', 'sample', 'street']
+                    ARRAY['4', 'sample', 'street'],
+                    1
                 ),
                 (
                     2000,
                     '5 Demo Rd',
                     'DD4 4DD',
-                    ARRAY['5', 'demo', 'rd']
+                    ARRAY['5', 'demo', 'road'],
+                    2
                 )
         ) AS t(
             unique_id,
             original_address_concat,
             postcode,
-            address_tokens
+            address_tokens,
+            ukam_address_id
         )
         """
     )
@@ -154,39 +140,6 @@ def trie_input_bindings(duck_con, enum_values) -> list[InputBinding]:
         InputBinding("fuzzy_addresses", duck_con.table("fuzzy_addresses")),
         InputBinding("canonical_addresses", duck_con.table("canonical_addresses")),
     ]
-
-
-def test_exact_matching_deduplicates_canonical(duck_con, dedupe_input_bindings):
-    pipeline = create_sql_pipeline(
-        duck_con,
-        dedupe_input_bindings,
-        [_annotate_exact_matches],
-    )
-
-    results = pipeline.run()
-
-    total_rows, distinct_unique_ids = results.aggregate(
-        "COUNT(*) AS total_rows, COUNT(DISTINCT unique_id) AS distinct_unique_ids"
-    ).fetchone()
-
-    assert total_rows == 2
-    assert distinct_unique_ids == 2
-
-    first_resolved_id, first_match_reason = (
-        results.filter("unique_id = 1")
-        .project("resolved_canonical_id, match_reason")
-        .fetchone()
-    )
-    assert first_resolved_id == 100
-    assert first_match_reason == MatchReason.EXACT.value
-
-    second_resolved_id, second_match_reason = (
-        results.filter("unique_id = 2")
-        .project("resolved_canonical_id, match_reason")
-        .fetchone()
-    )
-    assert second_resolved_id == 200
-    assert second_match_reason == MatchReason.EXACT.value
 
 
 def test_unmatched_records_retain_original_unique_id(duck_con, trie_input_bindings):
@@ -207,112 +160,57 @@ def test_unmatched_records_retain_original_unique_id(duck_con, trie_input_bindin
     assert "resolved_canonical_unique_id_bigint" not in columns
 
     rows = (
-        results.project("unique_id, resolved_canonical_id, match_reason")
-        .order("unique_id")
+        results.project(
+            "unique_id, resolved_canonical_id, match_reason, ukam_address_id"
+        )
+        .order("ukam_address_id")
         .fetchall()
     )
     assert rows == [
-        (1, 1000, MatchReason.EXACT.value),
-        (2, 2000, MatchReason.TRIE.value),
+        (1, 1000, MatchReason.EXACT.value, 1),
+        (10, 1000, MatchReason.EXACT.value, 2),
+        (2, 2000, MatchReason.EXACT.value, 3),
+        (2, 2000, MatchReason.EXACT.value, 4),
+        (2, 2000, MatchReason.TRIE.value, 5),
+        (2, 2000, MatchReason.TRIE.value, 6),
+        (2, 1000, MatchReason.TRIE.value, 7),
+        (3, None, MatchReason.UNMATCHED.value, 8),
     ]
 
 
-@pytest.fixture
-def trie_with_unmatched_input_bindings(duck_con, enum_values) -> list[InputBinding]:
-    duck_con.execute(
-        f"""
-        CREATE OR REPLACE TABLE fuzzy_addresses AS
-        SELECT *
-        FROM (
-            VALUES
-                (
-                    1,
-                    '4 Sample Street',
-                    'CC3 3CC',
-                    NULL::BIGINT,
-                    ARRAY['4', 'sample', 'street'],
-                    'unmatched'::ENUM {enum_values}
-                ),
-                (
-                    2,
-                    '5 Demo Road',
-                    'DD4 4DD',
-                    NULL::BIGINT,
-                    ARRAY['5', 'demo', 'road'],
-                    'unmatched'::ENUM {enum_values}
-                ),
-                (
-                    3,
-                    '999 Mystery Lane',
-                    'EE5 5EE',
-                    NULL::BIGINT,
-                    ARRAY['999', 'mystery', 'lane'],
-                    'unmatched'::ENUM {enum_values}
-                )
-        ) AS t(
-            unique_id,
-            original_address_concat,
-            postcode,
-            resolved_canonical_id,
-            address_tokens,
-            match_reason
-        )
-        """
-    )
-
-    duck_con.execute(
-        """
-        CREATE OR REPLACE TABLE canonical_addresses AS
-        SELECT *
-        FROM (
-            VALUES
-                (
-                    1000,
-                    '4 Sample Street',
-                    'CC3 3CC',
-                    ARRAY['4', 'sample', 'street']
-                ),
-                (
-                    2000,
-                    '5 Demo Rd',
-                    'DD4 4DD',
-                    ARRAY['5', 'demo', 'road']
-                )
-        ) AS t(
-            unique_id,
-            original_address_concat,
-            postcode,
-            address_tokens
-        )
-        """
-    )
-
-    return [
-        InputBinding("fuzzy_addresses", duck_con.table("fuzzy_addresses")),
-        InputBinding("canonical_addresses", duck_con.table("canonical_addresses")),
-    ]
-
-
-def test_trie_stage_outputs_only_matched_rows_without_duplicates(
-    duck_con, trie_with_unmatched_input_bindings
-):
+# When a non-unique unique_id field exists in our fuzzy addresses,
+# the trie stage will inflate our row count (due to the output and required
+# joins). This test checks confirms that this issue does not occur.
+# We've resolved this issue by implementing a ukam_address_id surrogate key
+# to guarantee uniqueness of the input records.
+@pytest.mark.parametrize(
+    "stages",
+    [
+        [_annotate_exact_matches, _filter_unmatched_exact_matches, _resolve_with_trie],
+        [_filter_unmatched_exact_matches, _resolve_with_trie],
+    ],
+)
+def test_trie_stage_does_not_inflate_row_count(duck_con, trie_input_bindings, stages):
     pipeline = create_sql_pipeline(
         duck_con,
-        trie_with_unmatched_input_bindings,
-        [_annotate_exact_matches, _filter_unmatched_exact_matches, _resolve_with_trie],
+        trie_input_bindings,
+        stages,
     )
 
     results = pipeline.run()
 
-    total_rows, distinct_unique_ids = results.aggregate(
-        "COUNT(*) AS total_rows, COUNT(DISTINCT unique_id) AS distinct_unique_ids"
-    ).fetchone()
-
-    # We have three input addresses (two match, one does not), so expect three output rows
-    assert total_rows == 3
-    assert distinct_unique_ids == 3
-
-    unmatched_count = (
-        results.filter("resolved_canonical_id IS NULL").count("*").fetchall()[0][0]
+    input_row_count = duck_con.table("fuzzy_addresses").count("*").fetchone()[0]
+    total_rows = results.count("*").fetchone()[0]
+    output_ids = results.order("ukam_address_id").project("ukam_address_id").fetchall()
+    input_ids = (
+        duck_con.table("fuzzy_addresses")
+        .order("ukam_address_id")
+        .project("ukam_address_id")
+        .fetchall()
     )
-    assert unmatched_count == 1
+
+    assert total_rows == input_row_count, (
+        "Trie pipeline should not increase row count; "
+        f"expected {input_row_count}, got {total_rows}"
+    )
+    assert output_ids == input_ids, "Pipeline must preserve ukam_address_id coverage"

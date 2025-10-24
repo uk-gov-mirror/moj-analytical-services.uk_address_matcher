@@ -13,22 +13,14 @@ from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
     stage_output="fuzzy_addresses",
 )
 def _annotate_exact_matches() -> list[CTEStep]:
-    # TODO(ThomasHepworth): Review whether we want to deduplicate canonical addresses here
-    # (we probably do, to avoid multiple matches to the same fuzzy address)
-
-    # Input tables should be named: `fuzzy_addresses` and `canonical_addresses`
-
     exact_value = MatchReason.EXACT.value
     enum_values = str(MatchReason.enum_values())
     unique_canonical_addresses_sql = """
-        SELECT
-            canon.original_address_concat,
-            canon.postcode,
-            canon.unique_id
+        SELECT *
         FROM {canonical_addresses} AS canon
         QUALIFY ROW_NUMBER() OVER (
             PARTITION BY canon.original_address_concat, canon.postcode
-            ORDER BY canon.unique_id
+            ORDER BY canon.ukam_address_id
         ) = 1
     """
     annotated_sql = f"""
@@ -76,8 +68,12 @@ def _filter_unmatched_exact_matches() -> list[CTEStep]:
     depends_on=["filter_unmatched_matches"],
 )
 def _resolve_with_trie() -> list[CTEStep]:
+    # TODO(ThomasHepworth): When we begin to finalise our API, move the deduplication
+    # logic for canonical addresses into a separate reusable step where it is run a single
+    # time for all matching strategies.
     filtered_canonical_sql = """
         SELECT
+            c.ukam_address_id AS canonical_ukam_address_id,
             c.unique_id AS canonical_unique_id,
             c.postcode,
             LEFT(c.postcode, LENGTH(c.postcode) - 1) AS postcode_group,
@@ -97,15 +93,15 @@ def _resolve_with_trie() -> list[CTEStep]:
     tries_sql = """
         SELECT
             postcode_group,
-            build_suffix_trie(canonical_unique_id, address_tokens) AS trie
+            build_suffix_trie(canonical_ukam_address_id, address_tokens) AS trie
         FROM {canonical_candidates_for_trie}
         GROUP BY postcode_group
     """
 
     raw_trie_matches_sql = """
         SELECT
-            fuzzy.unique_id,
-            find_address(fuzzy.address_tokens, tries.trie) AS trie_match_canonical_id
+            fuzzy.ukam_address_id AS fuzzy_ukam_address_id,
+            find_address(fuzzy.address_tokens, tries.trie) AS canonical_ukam_address_id
         FROM {input} AS fuzzy
         JOIN {postcode_group_tries} AS tries
           ON LEFT(fuzzy.postcode, LENGTH(fuzzy.postcode) - 1) = tries.postcode_group
@@ -113,21 +109,13 @@ def _resolve_with_trie() -> list[CTEStep]:
 
     trie_matches_sql = """
         SELECT
-            candidates.unique_id,
-            candidates.trie_match_canonical_id
+            candidates.fuzzy_ukam_address_id,
+            candidates.canonical_ukam_address_id,
+            canon.canonical_unique_id
         FROM {raw_trie_matches} AS candidates
-        WHERE candidates.trie_match_canonical_id IS NOT NULL
-    """
-
-    deduped_trie_matches_sql = """
-        SELECT
-            candidates.unique_id,
-            candidates.trie_match_canonical_id
-        FROM {trie_match_candidates} AS candidates
-        QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY candidates.unique_id
-            ORDER BY candidates.trie_match_canonical_id
-        ) = 1
+        JOIN {canonical_candidates_for_trie} AS canon
+          ON candidates.canonical_ukam_address_id = canon.canonical_ukam_address_id
+        WHERE candidates.canonical_ukam_address_id IS NOT NULL
     """
 
     trie_value = MatchReason.TRIE.value
@@ -136,17 +124,17 @@ def _resolve_with_trie() -> list[CTEStep]:
         SELECT
             a.unique_id,
             COALESCE(
-                m.trie_match_canonical_id,
+                m.canonical_unique_id,
                 a.resolved_canonical_id
             ) AS resolved_canonical_id,
             a.* EXCLUDE (unique_id, resolved_canonical_id, match_reason),
             CASE
-                WHEN m.trie_match_canonical_id IS NOT NULL THEN '{trie_value}'::ENUM {enum_values}
+                WHEN m.canonical_unique_id IS NOT NULL THEN '{trie_value}'::ENUM {enum_values}
                 ELSE a.match_reason
             END AS match_reason
         FROM {{fuzzy_addresses}} AS a
-        LEFT JOIN {{deduped_trie_matches}} AS m
-          ON a.unique_id = m.unique_id
+        LEFT JOIN {{trie_match_candidates}} AS m
+          ON a.ukam_address_id = m.fuzzy_ukam_address_id
     """
 
     return [
@@ -154,6 +142,5 @@ def _resolve_with_trie() -> list[CTEStep]:
         CTEStep("postcode_group_tries", tries_sql),
         CTEStep("raw_trie_matches", raw_trie_matches_sql),
         CTEStep("trie_match_candidates", trie_matches_sql),
-        CTEStep("deduped_trie_matches", deduped_trie_matches_sql),
         CTEStep("fuzzy_with_resolved_matches", combined_results_sql),
     ]

@@ -84,9 +84,7 @@ def test_address_matching_workflow_runs():
 
     df_predict_with_distinguishability_rel = best_matches_with_distinguishability(
         df_predict=df_predict_improved_rel,
-        df_addresses_to_match=messy_data_rel.select(
-            "unique_id", "address_concat", "postcode"
-        ),
+        df_addresses_to_match=df_messy_data_clean_rel,
         con=duckdb_con,
     )
 

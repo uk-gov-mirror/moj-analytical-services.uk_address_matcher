@@ -26,14 +26,14 @@ pd.options.display.max_colwidth = 1000
 
 # If you're using your own data you need the following columns:
 #
-# +-------------------+---------------+----------------------------------------+
-# |      Column       | DuckDB dtype  |               Description               |
-# +-------------------+---------------+----------------------------------------+
-# | unique_id         | BIGINT        | Unique identifier for each record       |
-# | source_dataset    | VARCHAR       | Source dataset label, e.g. 'epc'        |
-# | address_concat    | VARCHAR       | Full address (without postcode)         |
-# | postcode          | VARCHAR       | Postcode                                |
-# +-------------------+---------------+----------------------------------------+
+# +-------------------+----------------------+----------------------------------------+
+# |      Column       | DuckDB dtype         |               Description               |
+# +-------------------+----------------------+----------------------------------------+
+# | unique_id         | BIGINT or VARCHAR    | Unique identifier for each record       |
+# | source_dataset    | VARCHAR              | Source dataset label, e.g. 'epc'        |
+# | address_concat    | VARCHAR              | Full address (without postcode)         |
+# | postcode          | VARCHAR              | Postcode                                |
+# +-------------------+----------------------+----------------------------------------+
 
 
 # Any additional columns should be retained as-is by the cleaning code
@@ -46,21 +46,13 @@ con = duckdb.connect(database=":memory:")
 con.execute("INSTALL splink_udfs FROM community; LOAD splink_udfs;")
 
 # Read our example data in and ensure unique_id is the correct data type
-df_ch = (
-    con.read_parquet(p_ch)
-    .order("postcode")
-    .select("try_cast(unique_id as BIGINT) as unique_id, * EXCLUDE (unique_id)")
-)
-df_fhrs = (
-    con.read_parquet(p_fhrs)
-    .order("postcode")
-    .select("try_cast(unique_id as BIGINT) as unique_id, * EXCLUDE (unique_id)")
-)
+df_ch = con.read_parquet(p_ch)
+df_fhrs = con.read_parquet(p_fhrs)
 
 # Apply limit if TEST_LIMIT environment variable is set
 if os.getenv("TEST_LIMIT"):
-    df_ch = df_ch.limit(50)
-    df_fhrs = df_fhrs.limit(50)
+    df_ch = df_ch.limit(250)
+    df_fhrs = df_fhrs.limit(250)
 
 # -----------------------------------------------------------------------------
 # Step 2: Clean the data/feature engineering to prepare for matching model
@@ -119,13 +111,13 @@ print(f"Time taken: {end_time - start_time} seconds")
 
 print("\nResults before second pass:")
 dsum_1 = best_matches_summary(
-    df_predict=df_predict_ddb, df_addresses_to_match=df_fhrs, con=con
+    df_predict=df_predict_ddb, df_addresses_to_match=df_fhrs_exact_matches, con=con
 )
 dsum_1.show(max_width=500, max_rows=20)
 
 print("\nResults after second pass:")
 dsum_2 = best_matches_summary(
-    df_predict=df_predict_improved, df_addresses_to_match=df_fhrs, con=con
+    df_predict=df_predict_improved, df_addresses_to_match=df_fhrs_exact_matches, con=con
 )
 dsum_2.show(max_width=500, max_rows=20)
 # -----------------------------------------------------------------------------
@@ -135,7 +127,7 @@ dsum_2.show(max_width=500, max_rows=20)
 # Show matches with a weight of >5 and distinguishability of >5
 best_matches = best_matches_with_distinguishability(
     df_predict=df_predict_improved,
-    df_addresses_to_match=df_fhrs,
+    df_addresses_to_match=df_fhrs_exact_matches,
     con=con,
 )
 
