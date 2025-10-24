@@ -8,17 +8,19 @@ from uk_address_matcher.linking_model.exact_matching.exact_matching_model import
     _resolve_with_trie,
 )
 from uk_address_matcher.sql_pipeline.runner import InputBinding, create_sql_pipeline
-from uk_address_matcher.sql_pipeline.validation import ColumnSpec, validate_table
+from uk_address_matcher.sql_pipeline.validation import ColumnSpec, validate_tables
 
 if TYPE_CHECKING:
     import duckdb
 
     from uk_address_matcher.sql_pipeline.runner import DebugOptions
 
-
-# TODO(ThomasHepworth): move this upstream to cleaning once we have agreed a
-# standard schema for input addresses.
-CANONICAL_TABLE_REQUIRED_SCHEMA: list[ColumnSpec] = [ColumnSpec("unique_id", "BIGINT")]
+EXPECTED_COLUMNS = [
+    ColumnSpec("unique_id"),
+    ColumnSpec("original_address_concat"),
+    ColumnSpec("postcode"),
+    ColumnSpec("ukam_address_id"),
+]
 
 
 def run_deterministic_match_pass(
@@ -50,13 +52,16 @@ def run_deterministic_match_pass(
         InputBinding("canonical_addresses", df_addresses_to_search_within),
     ]
 
-    validate_table(
-        df_addresses_to_search_within,
-        required=CANONICAL_TABLE_REQUIRED_SCHEMA,
-        label="Canonical addresses",
+    # Run a quick validation on input tables to ensure expected columns are present
+    validate_tables(
+        relations={
+            "fuzzy_addresses": df_addresses_to_match,
+            "canonical_addresses": df_addresses_to_search_within,
+        },
+        required=EXPECTED_COLUMNS,
     )
 
-    two_phase_pipeline = create_sql_pipeline(
+    pipeline = create_sql_pipeline(
         con,
         input_bindings,
         [_annotate_exact_matches, _filter_unmatched_exact_matches, _resolve_with_trie],
@@ -65,8 +70,8 @@ def run_deterministic_match_pass(
     )
     if debug_options is not None:
         if debug_options.debug_mode:
-            two_phase_pipeline.show_plan()
-    exact_match_results = two_phase_pipeline.run(options=debug_options)
+            pipeline.show_plan()
+    exact_match_results = pipeline.run(options=debug_options)
 
     return exact_match_results
 
