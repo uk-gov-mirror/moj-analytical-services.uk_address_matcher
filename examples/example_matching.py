@@ -25,7 +25,6 @@ pd.options.display.max_colwidth = 1000
 # -----------------------------------------------------------------------------
 
 # If you're using your own data you need the following columns:
-#
 # +-------------------+----------------------+----------------------------------------+
 # |      Column       | DuckDB dtype         |               Description               |
 # +-------------------+----------------------+----------------------------------------+
@@ -68,6 +67,7 @@ df_fhrs_exact_matches = run_deterministic_match_pass(
     con=con,
     df_addresses_to_match=df_fhrs_clean,
     df_addresses_to_search_within=df_ch_clean,
+    enabled_stage_names=["resolve_with_trie"],
 )
 
 exact_match_summary = calculate_match_metrics(df_fhrs_exact_matches)
@@ -247,22 +247,18 @@ match_candidates = select_top_match_candidates(
     df_canonical=df_ch_clean,
     match_weight_threshold=15,
     distinguishability_threshold=None,
+    include_unmatched=True,
 )
 
 print("\nCombined match candidates summary:")
-match_candidate_summary = calculate_match_metrics(match_candidates)
-match_candidate_summary.show(max_width=500, max_rows=20)
+calculate_match_metrics(match_candidates).show(max_width=500, max_rows=20)
 
 # -----------------------------------------------------------------------------
-# Step 9: Inspect top records for each non-unmatched match reason
+# Step 9: Inspect top records for each match reason
 # -----------------------------------------------------------------------------
 
-non_unmatched_match_candidates = match_candidates.filter("match_reason != 'unmatched'")
 match_reasons = [
-    row[0]
-    for row in non_unmatched_match_candidates.project("match_reason")
-    .distinct()
-    .fetchall()
+    row[0] for row in match_candidates.project("match_reason").distinct().fetchall()
 ]
 
 for match_reason_value in match_reasons:
@@ -271,6 +267,6 @@ for match_reason_value in match_reasons:
 
     match_reason_sql_value = str(match_reason_value).replace("'", "''")
     print(f"\n=== Show 10 records in match_reason '{match_reason_value}' ===")
-    non_unmatched_match_candidates.filter(
-        f"match_reason = '{match_reason_sql_value}'"
-    ).limit(10).show(max_width=500, max_rows=10)
+    match_candidates.filter(f"match_reason = '{match_reason_sql_value}'").limit(
+        10
+    ).show(max_width=500, max_rows=10)
