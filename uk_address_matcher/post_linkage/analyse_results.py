@@ -32,21 +32,17 @@ def calculate_match_metrics(
         )
 
     aggregation_query = """
-        match_reason,
+        COALESCE(match_reason, 'unmatched') AS match_reason,
         COUNT(*) AS match_count,
-        printf('%.2f%%', 100*match_count/sum(match_count) over()) as match_percentage
+        printf('%.2f%%', 100.0*COUNT(*)/SUM(COUNT(*)) OVER ()) as match_percentage
     """
 
     order_keyword = "DESC" if order == "descending" else "ASC"
 
-    return (
-        exact_match_results.filter("match_reason IS NOT NULL")
-        .aggregate(
-            aggregation_query,
-            group_expr="match_reason",
-        )
-        .order(f"match_count {order_keyword}, match_reason")
-    )
+    return exact_match_results.aggregate(
+        aggregation_query,
+        group_expr="COALESCE(match_reason, 'unmatched')",
+    ).order(f"match_count {order_keyword}, match_reason")
 
 
 def best_matches_with_distinguishability(

@@ -6,7 +6,6 @@ from enum import Enum
 class MatchReason(Enum):
     """Canonical set of match reason values shared between Python and DuckDB."""
 
-    UNMATCHED = "unmatched"
     EXACT = "exact: full match"
     TRIE = "trie: exact match with skips and fuzziness"
     SPLINK = "splink: probabilistic match"
