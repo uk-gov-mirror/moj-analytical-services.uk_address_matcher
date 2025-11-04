@@ -40,6 +40,8 @@ def generate_test_data(
             "common_end_tokens_r": common_end_tokens_r,
             "postcode_l": "W1A",
             "postcode_r": "W1A",
+            "ukam_address_id_l": i,
+            "ukam_address_id_r": 1,
         }
         data.append(row)
     return data

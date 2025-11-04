@@ -1,6 +1,8 @@
-import time
 import os
+import time
+
 import duckdb
+
 from uk_address_matcher import (
     clean_data_using_precomputed_rel_tok_freq,
     get_linker,
@@ -47,7 +49,7 @@ con.execute(sql)
 sql = f"""
 create or replace table os as
 select
-   uprn as unique_id,
+    try_cast(uprn AS BIGINT) as unique_id,
    regexp_replace(fulladdress, ',[^,]*$', '') AS address_concat,
    postcode
 from {full_os_path}
@@ -132,7 +134,7 @@ print(
 
 dsum_1 = best_matches_summary(
     df_predict=df_predict_ddb,
-    df_addresses_to_match=df_epc_data,
+    df_addresses_to_match=df_epc_data_clean,
     con=con,
 )
 dsum_1.show(max_width=500)

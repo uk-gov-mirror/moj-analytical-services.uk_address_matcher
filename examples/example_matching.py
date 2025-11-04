@@ -1,17 +1,22 @@
+import os
+import time
+
 import duckdb
 import pandas as pd
-import os
 from IPython.display import display
 
-from uk_address_matcher.post_linkage.analyse_results import (
+from uk_address_matcher import (
     best_matches_summary,
     best_matches_with_distinguishability,
-)
-from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
+    calculate_match_metrics,
+    clean_data_using_precomputed_rel_tok_freq,
+    get_linker,
     improve_predictions_using_distinguishing_tokens,
+    run_deterministic_match_pass,
 )
-from uk_address_matcher import clean_data_using_precomputed_rel_tok_freq, get_linker
-import time
+from uk_address_matcher.post_linkage.match_candidate_selection import (
+    select_top_match_candidates,
+)
 
 pd.options.display.max_colwidth = 1000
 
@@ -20,16 +25,14 @@ pd.options.display.max_colwidth = 1000
 # -----------------------------------------------------------------------------
 
 # If you're using your own data you need the following columns:
-#
-# +-------------------+--------------------------------------------------------+
-# |      Column       |                     Description                        |
-# +-------------------+--------------------------------------------------------+
-# | unique_id         | Unique identifier for each record                      |
-# | source_dataset    | Populated with a constant string identifying the       |
-# |                   | dataset, e.g. 'epc'                                    |
-# | address_concat    | Full address concatenated as without  postcode         |
-# | postcode          | Postcode                                               |
-# +-------------------+--------------------------------------------------------+
+# +-------------------+----------------------+----------------------------------------+
+# |      Column       | DuckDB dtype         |               Description               |
+# +-------------------+----------------------+----------------------------------------+
+# | unique_id         | BIGINT or VARCHAR    | Unique identifier for each record       |
+# | source_dataset    | VARCHAR              | Source dataset label, e.g. 'epc'        |
+# | address_concat    | VARCHAR              | Full address (without postcode)         |
+# | postcode          | VARCHAR              | Postcode                                |
+# +-------------------+----------------------+----------------------------------------+
 
 
 # Any additional columns should be retained as-is by the cleaning code
@@ -39,27 +42,44 @@ p_fhrs = "./example_data/fhrs_addresses_sample.parquet"
 
 con = duckdb.connect(database=":memory:")
 
-df_ch = con.read_parquet(p_ch).order("postcode")
-df_fhrs = con.read_parquet(p_fhrs).order("postcode")
+con.execute("INSTALL splink_udfs FROM community; LOAD splink_udfs;")
+
+# Read our example data in and ensure unique_id is the correct data type
+df_ch = con.read_parquet(p_ch)
+df_fhrs = con.read_parquet(p_fhrs)
 
 # Apply limit if TEST_LIMIT environment variable is set
 if os.getenv("TEST_LIMIT"):
-    df_ch = df_ch.limit(50)
-    df_fhrs = df_fhrs.limit(50)
+    df_ch = df_ch.limit(250)
+    df_fhrs = df_fhrs.limit(250)
 
 # -----------------------------------------------------------------------------
 # Step 2: Clean the data/feature engineering to prepare for matching model
 # -----------------------------------------------------------------------------
-
 df_ch_clean = clean_data_using_precomputed_rel_tok_freq(df_ch, con=con)
 df_fhrs_clean = clean_data_using_precomputed_rel_tok_freq(df_fhrs, con=con)
 
 # -----------------------------------------------------------------------------
-# Step 3: First pass - Link the data using Splink
+# Step 3: Run exact matching to reduce the number of records to consider
+# -----------------------------------------------------------------------------
+
+df_fhrs_exact_matches = run_deterministic_match_pass(
+    con=con,
+    df_addresses_to_match=df_fhrs_clean,
+    df_addresses_to_search_within=df_ch_clean,
+    enabled_stage_names=["resolve_with_trie"],
+)
+
+exact_match_summary = calculate_match_metrics(df_fhrs_exact_matches)
+print("\nExact match results summary:")
+print(exact_match_summary)
+
+# -----------------------------------------------------------------------------
+# Step 4: Link the data using Splink - First pass
 # -----------------------------------------------------------------------------
 
 linker = get_linker(
-    df_addresses_to_match=df_fhrs_clean,
+    df_addresses_to_match=df_fhrs_exact_matches,
     df_addresses_to_search_within=df_ch_clean,
     con=con,
     include_full_postcode_block=True,
@@ -70,7 +90,7 @@ df_predict = linker.inference.predict(threshold_match_weight=-50)
 df_predict_ddb = df_predict.as_duckdbpyrelation()
 
 # -----------------------------------------------------------------------------
-# Step 4: Second pass - Improve predictions using distinguishing tokens
+# Step 5: Improve predictions using distinguishing tokens - Second pass
 # -----------------------------------------------------------------------------
 
 start_time = time.time()
@@ -86,30 +106,28 @@ end_time = time.time()
 print(f"Time taken: {end_time - start_time} seconds")
 
 # -----------------------------------------------------------------------------
-# Step 5: Compare results before and after the second pass
+# Step 6: Compare results before and after the second pass
 # -----------------------------------------------------------------------------
 
 print("\nResults before second pass:")
 dsum_1 = best_matches_summary(
-    df_predict=df_predict_ddb, df_addresses_to_match=df_fhrs, con=con
+    df_predict=df_predict_ddb, df_addresses_to_match=df_fhrs_exact_matches, con=con
 )
 dsum_1.show(max_width=500, max_rows=20)
 
 print("\nResults after second pass:")
 dsum_2 = best_matches_summary(
-    df_predict=df_predict_improved, df_addresses_to_match=df_fhrs, con=con
+    df_predict=df_predict_improved, df_addresses_to_match=df_fhrs_exact_matches, con=con
 )
 dsum_2.show(max_width=500, max_rows=20)
-
-
 # -----------------------------------------------------------------------------
-# Step 6: Inspect the result
+# Step 7: Inspect the Splink result
 # -----------------------------------------------------------------------------
 
 # Show matches with a weight of >5 and distinguishability of >5
 best_matches = best_matches_with_distinguishability(
     df_predict=df_predict_improved,
-    df_addresses_to_match=df_fhrs,
+    df_addresses_to_match=df_fhrs_exact_matches,
     con=con,
 )
 
@@ -217,3 +235,38 @@ display(
         waterfall_data.df().to_dict(orient="records"), filter_nulls=False
     )
 )
+
+# -----------------------------------------------------------------------------
+# Step 8: Combine deterministic and Splink match candidates
+# -----------------------------------------------------------------------------
+
+match_candidates = select_top_match_candidates(
+    con=con,
+    df_exact_matches=df_fhrs_exact_matches,
+    df_splink_matches=best_matches,
+    df_canonical=df_ch_clean,
+    match_weight_threshold=15,
+    distinguishability_threshold=None,
+    include_unmatched=True,
+)
+
+print("\nCombined match candidates summary:")
+calculate_match_metrics(match_candidates).show(max_width=500, max_rows=20)
+
+# -----------------------------------------------------------------------------
+# Step 9: Inspect top records for each match reason
+# -----------------------------------------------------------------------------
+
+match_reasons = [
+    row[0] for row in match_candidates.project("match_reason").distinct().fetchall()
+]
+
+for match_reason_value in match_reasons:
+    if match_reason_value is None:
+        continue
+
+    match_reason_sql_value = str(match_reason_value).replace("'", "''")
+    print(f"\n=== Show 10 records in match_reason '{match_reason_value}' ===")
+    match_candidates.filter(f"match_reason = '{match_reason_sql_value}'").limit(
+        10
+    ).show(max_width=500, max_rows=10)

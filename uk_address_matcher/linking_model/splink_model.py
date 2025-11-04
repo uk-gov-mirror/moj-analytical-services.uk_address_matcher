@@ -2,7 +2,6 @@ import importlib.resources as pkg_resources
 import json
 
 from duckdb import DuckDBPyConnection, DuckDBPyRelation
-
 from splink import DuckDBAPI, Linker, SettingsCreator
 
 
@@ -45,6 +44,27 @@ def get_linker(
             "before calling get_linker as it will be overwritten by the linker."
         )
 
+    # Skim off any matches that we have already labelled as exact matches
+    # Neither match_reason or resolved_canonical_id are needed for Splink processing
+    if "resolved_canonical_id" in df_addresses_to_match.columns:
+        df_addresses_to_match = df_addresses_to_match.filter(
+            "resolved_canonical_id IS NULL"
+        ).select(
+            "* EXCLUDE(match_reason, resolved_canonical_id, canonical_ukam_address_id)"
+        )
+    unresolved_count = df_addresses_to_match.count("*").fetchall()[0][0]
+    if unresolved_count == 0:
+        raise ValueError(
+            "No unresolved records remain after deterministic matching. Either "
+            "skip Splink or provide rows with unresolved matches."
+        )
+
+    canonical_count = df_addresses_to_search_within.count("*").fetchall()[0][0]
+    if canonical_count == 0:
+        raise ValueError(
+            "Canonical relation is empty - Splink requires at least one search record."
+        )
+
     if settings is None:
         settings_as_dict = _get_model_settings_dict()
     else:
@@ -53,6 +73,11 @@ def get_linker(
     if additional_columns_to_retain:
         settings_as_dict.setdefault("additional_columns_to_retain", [])
         settings_as_dict["additional_columns_to_retain"] += additional_columns_to_retain
+
+    # Use ukam_address_id as unique_id column name (created as part of our cleaning process)
+    settings_as_dict["unique_id_column_name"] = "ukam_address_id"
+    # Also make sure we now retain unique_id from both datasets...
+    settings_as_dict["additional_columns_to_retain"] += ["unique_id"]
 
     settings_as_dict["retain_intermediate_calculation_columns"] = (
         retain_intermediate_calculation_columns

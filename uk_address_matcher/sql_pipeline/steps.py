@@ -70,6 +70,15 @@ class CTEStep:
             "or iterable of these"
         )
 
+    def __hash__(self) -> int:
+        return hash((self.name, self.sql))
+
+    @property
+    def fingerprint(self) -> str:
+        """Stable identifier for this fragment based on its SQL contents."""
+
+        return self.sql
+
 
 @dataclass
 class StageMeta:
@@ -108,6 +117,13 @@ class Stage:
     # Let dataclass generate eq; supply a hash consistent with eq but stable.
     def __hash__(self) -> int:
         return hash((self.name, self.steps, self.output, self.checkpoint))
+
+    @property
+    def fingerprint(self) -> Tuple[Tuple[str, ...], Optional[str], bool]:
+        """Stable identifier emphasising SQL content over human-readable names."""
+
+        step_fingerprints = tuple(step.fingerprint for step in self.steps)
+        return (step_fingerprints, self.output, self.checkpoint)
 
     def _format_cte_steps(self) -> List[str]:
         """Return formatted plan lines detailing the queued CTE fragments."""
@@ -229,8 +245,8 @@ def pipeline_stage(
     stage_output: Optional[str] = None,
     stage_registers: Optional[dict] = None,
     preludes: Optional[list] = None,
-) -> Callable[[Callable[P, SQLSpec]], Callable[P, "Stage"]]:
-    def deco(fn: Callable[P, SQLSpec]) -> Callable[P, "Stage"]:
+) -> Callable[[Callable[P, SQLSpec]], Callable[P, Stage]]:
+    def deco(fn: Callable[P, SQLSpec]) -> Callable[P, Stage]:
         stage_name = name or fn.__name__
 
         # normalise depends_on/tags to lists of strings
