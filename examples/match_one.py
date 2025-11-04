@@ -56,24 +56,16 @@ df_exact_matches = run_deterministic_match_pass(
     df_addresses_to_search_within=df_os_clean,
 )
 
-exact_matches = df_exact_matches.filter("resolved_canonical_id IS NOT NULL")
-exact_match_count = exact_matches.count("*").fetchall()[0][0]
-if exact_match_count:
-    print(f"Exact matches found: {exact_match_count}")
-    exact_matches.show(max_width=5000, max_rows=20)
-else:
-    print("No exact matches found; proceeding with probabilistic matching only.")
-
 # Step 3b: Collect unresolved records to check if any remain for processing
 # NB: the `get_linker` function will automatically error if you supply no unresolved records,
 # so you can choose to catch that error instead of this check if preferred.
 df_unresolved = df_exact_matches.filter("resolved_canonical_id IS NULL")
 unresolved_count = df_unresolved.count("*").fetchall()[0][0]
 if unresolved_count == 0:
-    print(
-        "All records resolved deterministically; skipping probabilistic matching stage."
-    )
+    print("Record resolved deterministically; skipping probabilistic matching stage.")
+    df_exact_matches.show(max_width=5000, max_rows=20)
 else:
+    print("No exact match found; proceeding with probabilistic matching only.")
     # Step 4: Build a Splink linker with the filtered search space
     linker = get_linker(
         df_addresses_to_match=df_unresolved,

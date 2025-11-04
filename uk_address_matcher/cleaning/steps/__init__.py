@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from uk_address_matcher.cleaning.steps.normalisation import (
     _assign_ukam_address_id,
-    _add_match_reason_enum_field,
     _canonicalise_postcode,
     _clean_address_string_first_pass,
     _derive_original_address_concat,
@@ -47,7 +46,6 @@ __all__ = [
     "_clean_address_string_first_pass",
     "_remove_duplicate_end_tokens",
     "_derive_original_address_concat",
-    "_add_match_reason_enum_field",
     "_assign_ukam_address_id",
     # tokenisation
     "_split_numeric_tokens_to_cols",
