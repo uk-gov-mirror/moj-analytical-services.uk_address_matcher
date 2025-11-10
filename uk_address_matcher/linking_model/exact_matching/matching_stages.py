@@ -70,9 +70,7 @@ class ExactMatchStageConfig:
 _STAGE_REGISTRY: dict[StageName, ExactMatchStageConfig] = {
     StageName.EXACT_MATCHES: ExactMatchStageConfig(
         factory=_annotate_exact_matches,
-        pre_filter_canonical=_restrict_canonical_to_fuzzy_postcodes(
-            "exact", "fuzzy_addresses"
-        ),
+        pre_filter_canonical=_restrict_canonical_to_fuzzy_postcodes("exact"),
     ),
     StageName.UNIQUE_TRIGRAM: ExactMatchStageConfig(
         factory=_resolve_with_trigrams(
@@ -81,14 +79,12 @@ _STAGE_REGISTRY: dict[StageName, ExactMatchStageConfig] = {
             include_conflicts=False,
             include_trigram_text=True,
         ),
-        pre_filter_canonical=_restrict_canonical_to_fuzzy_postcodes(
-            "exact", "fuzzy_addresses"
-        ),
+        pre_filter_canonical=_restrict_canonical_to_fuzzy_postcodes("exact"),
     ),
     StageName.TRIE: ExactMatchStageConfig(
         factory=_resolve_with_trie,
         pre_filter_canonical=_restrict_canonical_to_fuzzy_postcodes(
-            "drop_last_char", "fuzzy_addresses"
+            "drop_last_char"
         ),
     ),
 }
