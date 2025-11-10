@@ -13,17 +13,8 @@ FuzzyInputName = Literal["fuzzy_addresses", "unmatched_records"]
     description="Build tries for unmatched canonical addresses and resolve remaining fuzzy rows",
     tags=["phase_1", "trie", "exact_matching"],
 )
-def _resolve_with_trie(
-    fuzzy_input_name: FuzzyInputName = "fuzzy_addresses",
-) -> list[CTEStep]:
-    """Resolve fuzzy addresses using trie-based suffix matching.
-
-    Parameters
-    ----------
-    fuzzy_input_name:
-        The placeholder name for the fuzzy input table. Defaults to "fuzzy_addresses" for
-        the initial pass. Should be set to "unmatched_records" when running after filtering.
-    """
+def _resolve_with_trie() -> list[CTEStep]:
+    """Resolve fuzzy addresses using trie-based suffix matching."""
     # Build tries grouped by postcode_group from the pre-filtered canonical addresses
     tries_sql = """
         SELECT
@@ -34,12 +25,12 @@ def _resolve_with_trie(
     """
 
     # Match fuzzy addresses to tries by joining on postcode_group
-    raw_trie_matches_sql = f"""
+    raw_trie_matches_sql = """
         SELECT
             fuzzy.ukam_address_id AS fuzzy_ukam_address_id,
             find_address(fuzzy.address_tokens, tries.trie) AS canonical_ukam_address_id
-        FROM {{{fuzzy_input_name}}} AS fuzzy
-        JOIN {{postcode_group_tries}} AS tries
+        FROM {fuzzy_addresses} AS fuzzy
+        JOIN {postcode_group_tries} AS tries
           ON LEFT(fuzzy.postcode, LENGTH(fuzzy.postcode) - 1) = tries.postcode_group
     """
 

@@ -373,7 +373,7 @@ def _final_column_order():
     description="Build a token frequency table from numeric and non-numeric tokens",
     tags="term_frequency_analysis",
 )
-def get_token_frequeny_table():
+def _get_token_frequeny_table():
     """Build a token frequency table from numeric and non-numeric tokens."""
 
     sql = """

@@ -14,6 +14,7 @@ from uk_address_matcher.cleaning.steps.term_frequencies import (
     _add_term_frequencies_to_address_tokens_using_registered_df,
     _final_column_order,
     _first_unusual_token,
+    _get_token_frequeny_table,
     _move_common_end_tokens_to_field,
     _separate_unusual_tokens,
     _use_first_unusual_token_if_no_numeric_token,
@@ -21,7 +22,6 @@ from uk_address_matcher.cleaning.steps.term_frequencies import (
 from uk_address_matcher.cleaning.steps.token_parsing import (
     _clean_address_string_second_pass,
     _generalised_token_aliases,
-    _get_token_frequeny_table,
     _parse_out_flat_position_and_letter,
     _parse_out_numbers,
     _separate_distinguishing_start_tokens_from_with_respect_to_adjacent_records,

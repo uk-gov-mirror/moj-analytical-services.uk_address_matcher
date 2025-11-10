@@ -5,7 +5,7 @@ from uk_address_matcher.cleaning.steps.regexes import (
     remove_multiple_spaces,
     trim,
 )
-from uk_address_matcher.sql_pipeline.steps import CTEStep, Stage, pipeline_stage
+from uk_address_matcher.sql_pipeline.steps import CTEStep, pipeline_stage
 
 
 @pipeline_stage(
@@ -330,10 +330,3 @@ def _generalised_token_aliases():
     FROM {{input}}
     """
     return sql
-
-
-def _get_token_frequeny_table() -> Stage:
-    """Moved to term_frequencies module; kept for backward-compat imports."""
-    raise NotImplementedError(
-        "Use uk_address_matcher.cleaning.steps.term_frequencies.get_token_frequeny_table instead"
-    )
