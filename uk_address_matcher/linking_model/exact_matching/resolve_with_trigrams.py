@@ -1,5 +1,3 @@
-"""Pipeline stage for trigram-based resolution."""
-
 from __future__ import annotations
 
 from uk_address_matcher.sql_pipeline.match_reasons import MatchReason
@@ -23,10 +21,8 @@ def _trigram_hash_expression(alias: str = "tri") -> str:
 
 @pipeline_stage(
     name="resolve_with_trigrams",
-    description="Resolve unmatched records using unique trigram matches per postcode",
+    description="Resolve records using unique trigram matches",
     tags=["phase_1", "trigram", "exact_matching"],
-    depends_on=["filter_unmatched_matches", "distinct_unmatched_postcodes"],
-    stage_output="fuzzy_addresses",
 )
 def _resolve_with_trigrams(
     ngram_size: int = 3,
@@ -34,7 +30,7 @@ def _resolve_with_trigrams(
     include_conflicts: bool = False,
     include_trigram_text: bool = False,
 ) -> list[CTEStep]:
-    trigram_value = MatchReason.TRIGRAM.value
+    trigram_value = MatchReason.UNIQUE_TRIGRAM.value
     enum_values = str(MatchReason.enum_values())
 
     trigram_text_projection = (
@@ -54,29 +50,14 @@ def _resolve_with_trigrams(
     supporting_text_select = (
         ", supporting_trigram_texts" if include_trigram_text else ""
     )
-    combined_text_select = (
-        ", matches.supporting_trigram_texts" if include_trigram_text else ""
-    )
-
-    canonical_candidates_sql = """
-        SELECT
-            c.ukam_address_id AS canonical_ukam_address_id,
-            c.unique_id AS canonical_unique_id,
-            c.postcode,
-            c.address_tokens
-        FROM {canonical_addresses} AS c
-        JOIN {distinct_unmatched_postcodes} AS postcodes
-          ON c.postcode = postcodes.postcode
-        WHERE c.unique_id IS NOT NULL
-    """
 
     canonical_trigrams_sql = f"""
         SELECT
-            canon.canonical_ukam_address_id,
+            canon.ukam_address_id as canonical_ukam_address_id,
             canon.canonical_unique_id,
             canon.postcode,
             {_ngram_expression("canon.address_tokens", ngram_size)} AS ngrams
-        FROM {{canonical_trigram_candidates}} AS canon
+        FROM {{canonical_addresses_restricted}} AS canon
         WHERE length(canon.address_tokens) >= {ngram_size}
     """
 
@@ -107,7 +88,7 @@ def _resolve_with_trigrams(
             f.ukam_address_id AS fuzzy_ukam_address_id,
             f.postcode,
             {_ngram_expression("f.address_tokens", ngram_size)} AS ngrams
-    FROM {{unmatched_records}} AS f
+    FROM {{fuzzy_addresses}} AS f
         WHERE length(f.address_tokens) >= {ngram_size}
     """
 
@@ -135,11 +116,13 @@ def _resolve_with_trigrams(
           USING (postcode, trigram_hash)
     """
 
+    # TODO(ThomasHepworth): Realistically, we don't need the count check if
+    # we only want >= 1 unique hits. We can just check for existence.
     trigram_one_to_one_links_sql = f"""
         SELECT
             links.fuzzy_ukam_address_id,
             MIN(links.canonical_ukam_address_id) AS canonical_ukam_address_id,
-            MIN(links.canonical_unique_id) AS canonical_unique_id,
+            MIN(links.canonical_unique_id) AS resolved_canonical_id,
             links.postcode,
             COUNT(*) AS trigram_hit_count,
             LIST(DISTINCT links.trigram_hash) AS supporting_trigram_hashes
@@ -152,17 +135,17 @@ def _resolve_with_trigrams(
 
     trigram_matches_sql = f"""
         SELECT
-            fuzzy_ukam_address_id,
+            fuzzy_ukam_address_id as ukam_address_id,
             canonical_ukam_address_id,
-            canonical_unique_id,
+            resolved_canonical_id,
             trigram_hit_count,
-            supporting_trigram_hashes
+            supporting_trigram_hashes,
+            '{trigram_value}'::ENUM {enum_values} AS match_reason
             {supporting_text_select}
         FROM {{trigram_one_to_one_links}}
     """
 
     steps: list[CTEStep] = [
-        CTEStep("canonical_trigram_candidates", canonical_candidates_sql),
         CTEStep("canonical_trigrams", canonical_trigrams_sql),
         CTEStep("canonical_trigrams_exploded", canonical_trigrams_exploded_sql),
         CTEStep("unique_trigram_index", unique_trigram_index_sql),
@@ -173,6 +156,7 @@ def _resolve_with_trigrams(
         CTEStep("trigram_matches", trigram_matches_sql),
     ]
 
+    # This SQL path is for debugging / analysis purposes
     if include_conflicts:
         trigram_conflicts_sql = f"""
             SELECT
@@ -188,26 +172,4 @@ def _resolve_with_trigrams(
         """
         steps.append(CTEStep("trigram_conflicts", trigram_conflicts_sql))
 
-    combined_results_sql = f"""
-        SELECT
-            base.unique_id,
-            COALESCE(
-                matches.canonical_unique_id,
-                base.resolved_canonical_id
-            ) AS resolved_canonical_id,
-            base.* EXCLUDE (unique_id, resolved_canonical_id, match_reason),
-            {combined_text_select}
-            CASE
-                WHEN matches.canonical_unique_id IS NOT NULL THEN '{trigram_value}'::ENUM {enum_values}
-                ELSE base.match_reason
-            END AS match_reason
-        FROM {{fuzzy_addresses}} AS base
-        LEFT JOIN {{trigram_matches}} AS matches
-          ON base.ukam_address_id = matches.fuzzy_ukam_address_id
-    """
-
-    steps.append(CTEStep("fuzzy_with_trigram_matches", combined_results_sql))
     return steps
-
-
-__all__ = ["_resolve_with_trigrams"]

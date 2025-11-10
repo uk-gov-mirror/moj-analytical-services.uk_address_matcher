@@ -13,6 +13,10 @@ from uk_address_matcher.linking_model.exact_matching.input_filters import (
 from uk_address_matcher.linking_model.exact_matching.resolve_with_trie import (
     _resolve_with_trie,
 )
+from uk_address_matcher.linking_model.exact_matching.resolve_with_trigrams import (
+    _resolve_with_trigrams,
+)
+from uk_address_matcher.sql_pipeline.runner import InputBinding, create_sql_pipeline
 from uk_address_matcher.sql_pipeline.validation import ColumnSpec, validate_tables
 
 if TYPE_CHECKING:
@@ -30,6 +34,7 @@ class StageName(str, Enum):
     """Available exact matching stages."""
 
     EXACT_MATCHES = "exact_matches"
+    UNIQUE_TRIGRAM = "unique_trigram"
     TRIE = "trie"
 
 
@@ -52,14 +57,13 @@ class ExactMatchStageConfig:
 
     factory: StageFactory
     pre_filter_canonical: Optional[Stage] = None
-    fuzzy_input_name: FuzzyInputName = "fuzzy_addresses"
 
     def to_stages(self) -> list[Stage]:
         """Build the stage queue for this exact matching stage."""
         stages: list[Stage] = []
         if self.pre_filter_canonical is not None:
             stages.append(self.pre_filter_canonical)
-        stages.append(self.factory(self.fuzzy_input_name))
+        stages.append(self.factory)
         return stages
 
 
@@ -69,14 +73,23 @@ _STAGE_REGISTRY: dict[StageName, ExactMatchStageConfig] = {
         pre_filter_canonical=_restrict_canonical_to_fuzzy_postcodes(
             "exact", "fuzzy_addresses"
         ),
-        fuzzy_input_name="fuzzy_addresses",
+    ),
+    StageName.UNIQUE_TRIGRAM: ExactMatchStageConfig(
+        factory=_resolve_with_trigrams(
+            ngram_size=3,
+            min_unique_hits=1,
+            include_conflicts=False,
+            include_trigram_text=True,
+        ),
+        pre_filter_canonical=_restrict_canonical_to_fuzzy_postcodes(
+            "exact", "fuzzy_addresses"
+        ),
     ),
     StageName.TRIE: ExactMatchStageConfig(
         factory=_resolve_with_trie,
         pre_filter_canonical=_restrict_canonical_to_fuzzy_postcodes(
             "drop_last_char", "fuzzy_addresses"
         ),
-        fuzzy_input_name="fuzzy_addresses",
     ),
 }
 
@@ -98,26 +111,7 @@ StageInput = Union[StageName, str]
 def _normalise_enabled_stages(
     enabled: Optional[Iterable[StageInput]],
 ) -> list[StageName]:
-    """Validate optional stage configuration while preserving order.
-
-    Accepts both StageName Enum values and str for backward compatibility.
-    If enabled is None, returns an empty list (no optional stages).
-
-    Parameters
-    ----------
-    enabled:
-        Iterable of stage names (Enum or str). None means no optional stages.
-
-    Returns
-    -------
-    list[StageName]
-        Validated list of optional stages in the order provided.
-
-    Raises
-    ------
-    ValueError:
-        If an unknown stage is specified, always-on stage is included, or duplicates found.
-    """
+    """Validate optional stage configuration while preserving order."""
     if enabled is None:
         return []
 
@@ -201,14 +195,13 @@ def _run_stage(
     explain: bool = False,
 ) -> Optional[duckdb.DuckDBPyRelation]:
     """Execute a single matching stage and return results."""
-    from uk_address_matcher.sql_pipeline.runner import InputBinding, create_sql_pipeline
 
     config = _STAGE_REGISTRY[stage_name]
 
     pipeline = create_sql_pipeline(
         con,
         [
-            InputBinding(config.fuzzy_input_name, df_fuzzy_unmatched),
+            InputBinding("fuzzy_addresses", df_fuzzy_unmatched),
             InputBinding("canonical_addresses", df_addresses_to_search_within),
         ],
         config.to_stages(),

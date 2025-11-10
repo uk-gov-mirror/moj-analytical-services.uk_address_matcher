@@ -9,6 +9,7 @@ class MatchReason(Enum):
     EXACT = "exact: full match"
     TRIE = "trie: exact match with skips and fuzziness"
     SPLINK = "splink: probabilistic match"
+    UNIQUE_TRIGRAM = "unique_trigram: unique trigram match"
 
     def __str__(self) -> str:  # pragma: no cover - for convenience only
         return self.value
