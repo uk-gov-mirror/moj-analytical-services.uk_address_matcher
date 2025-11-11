@@ -135,7 +135,7 @@ To add a new benchmark dataset:
 1. **Create a loader function** in this folder (e.g., `my_dataset.py`):
 
 ```python
-from benchmarking.datasets.base import DatasetInfo
+from benchmarking.datasets.registry import DatasetInfo
 from uk_address_matcher.cleaning.pipelines import clean_data_with_minimal_steps
 
 MY_DATASET_INFO = DatasetInfo(
